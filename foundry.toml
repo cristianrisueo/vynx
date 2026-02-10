@@ -15,4 +15,6 @@ invariant = { runs = 256, depth = 15 }
 remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
     "@aave/contracts/=lib/aave-v3-core/contracts/",
+    "@aave/periphery/contracts/=lib/aave-v3-periphery/contracts/", 
+    "@uniswap/v3-periphery/contracts/=lib/v3-periphery/contracts/",
 ]

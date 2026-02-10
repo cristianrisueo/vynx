@@ -15,24 +15,6 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
  *        entre treasury y founder
  */
 interface IVault is IERC4626 {
-    //* Constantes. Las interfaces no pueden tener constantes, solo firmas de funciones al menos en solidity
-    //* por lo que las constantes se definen como view functions en la interfaz, se implementan como constantes
-
-    /**
-     * @notice Base para cálculos de basis points
-     * @dev Constante inmutable: 10000 basis points = 100%
-     * @return basisPoints Base de 10000 para todos los cálculos de porcentajes
-     */
-    function BASIS_POINTS() external view returns (uint256 basisPoints);
-
-    /**
-     * @notice Performance fee máximo permitido (límite de seguridad)
-     * @dev Constante inmutable que protege a usuarios de fees excesivos incluso si owner
-     *      key es comprometida. Típicamente 50% (5000 basis points) como estándar de industria
-     * @return maxFeeBps Performance fee máximo en basis points
-     */
-    function MAX_PERFORMANCE_FEE() external view returns (uint256 maxFeeBps);
-
     //* Eventos
 
     /**

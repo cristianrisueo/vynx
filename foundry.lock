@@ -5,6 +5,12 @@
       "rev": "b74526a7bc67a3a117a1963fc871b3eb8cea8435"
     }
   },
+  "lib/aave-v3-periphery": {
+    "tag": {
+      "name": "v3.0.1",
+      "rev": "72fdcca18838c2f4e05ecd25bbfb44f0db5383f7"
+    }
+  },
   "lib/forge-std": {
     "tag": {
       "name": "v1.14.0",
@@ -15,6 +21,12 @@
     "tag": {
       "name": "v5.5.0",
       "rev": "fcbae5394ae8ad52d8e580a3477db99814b9d565"
+    }
+  },
+  "lib/v3-periphery": {
+    "tag": {
+      "name": "v1.3.0",
+      "rev": "80f26c86c57b8a5e4b913f42844d4c8bd274d058"
     }
   }
 }
