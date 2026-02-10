@@ -123,8 +123,8 @@ interface IVault is IERC4626 {
     function harvest() external returns (uint256 profit);
 
     /**
-     * @notice Asigna assets idle del vault a las estrategias mediante el strategy manager
-     * @dev Solo ejecuta si idle_weth >= idleThreshold, evitando gas innecesario en allocations
+     * @notice Asigna assets idle buffer del vault a las estrategias mediante el strategy manager
+     * @dev Solo ejecuta si idleBuffer >= idleThreshold, evitando gas innecesario en allocations
      *      pequeñas. Los assets idle se acumulan principalmente por nuevos deposits de usuarios
      *      que aún no han sido asignados a estrategias productivas
      * @dev Función pública sin restricciones: cualquier dirección puede llamarla cuando se alcance
@@ -226,7 +226,7 @@ interface IVault is IERC4626 {
 
     /**
      * @notice Devuelve la límite de assets en el idle buffer requerido para ejecutar allocateIdle()
-     * @dev Previene allocations antieconómicas. Solo cuando idle_weth >= idleThreshold se
+     * @dev Previene allocations antieconómicas. Solo cuando idleBuffer >= idleThreshold se
      *      justifica el coste de gas de asignar capital a estrategias. Por debajo de este
      *      threshold, allocateIdle() no ejecutará nada
      * @return threshold Límite mínimo de assets idle para realizar allocation
