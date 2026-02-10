@@ -4,7 +4,7 @@ pragma solidity 0.8.33;
 /**
  * @title IStrategy
  * @author cristianrisueo
- * @notice Interfaz estándar que todas las estrategoas deben implementar
+ * @notice Interfaz estándar que todas las estrategias deben implementar
  * @dev Permite que StrategyManager trate estrategias de distintos protocolos:
  *      Aave, Compound, etc... De manera uniforme
  */
