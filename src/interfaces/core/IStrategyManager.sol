@@ -56,6 +56,19 @@ interface IStrategyManager {
      */
     event TargetAllocationUpdated();
 
+    /**
+     * @notice Emitido cuando una estrategia falla durante harvest
+     * @param strategy Direccion de la estrategia que fallo
+     * @param reason Razon del fallo si esta disponible
+     */
+    event HarvestFailed(address indexed strategy, string reason);
+
+    /**
+     * @notice Emitido cuando se inicializa el vault
+     * @param vault Direccion del vault autorizado
+     */
+    event Initialized(address indexed vault);
+
     //* Funciones principales
 
     /**
