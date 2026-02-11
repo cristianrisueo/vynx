@@ -109,6 +109,13 @@ interface IVault is IERC4626 {
      */
     event FounderUpdated(address indexed oldFounder, address indexed newFounder);
 
+    /**
+     * @notice Emitido cuando se añade o remueve un keeper oficial
+     * @param keeper Dirección del keeper
+     * @param status True si se añade, false si se remueve
+     */
+    event OfficialKeeperUpdated(address indexed keeper, bool status);
+
     //* Funciones principales
 
     /**
@@ -291,4 +298,12 @@ interface IVault is IERC4626 {
      * @return totalProfit Profit total acumulado en assets desde el deploy del vault
      */
     function totalHarvested() external view returns (uint256 totalProfit);
+
+    /**
+     * @notice Devuelve si una direccion es keeper oficial del protocolo
+     * @dev Los keepers oficiales no reciben incentivo al ejecutar harvest
+     * @param keeper Address a comprobar
+     * @return isOfficial True si es keeper oficial, false en caso contrario
+     */
+    function isOfficialKeeper(address keeper) external view returns (bool isOfficial);
 }
