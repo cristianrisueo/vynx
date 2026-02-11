@@ -116,6 +116,20 @@ interface IVault is IERC4626 {
      */
     event OfficialKeeperUpdated(address indexed keeper, bool status);
 
+    /**
+     * @notice Emitido cuando se actualiza el profit mínimo para harvest
+     * @param oldMin Profit mínimo anterior
+     * @param newMin Nuevo profit mínimo
+     */
+    event MinProfitForHarvestUpdated(uint256 oldMin, uint256 newMin);
+
+    /**
+     * @notice Emitido cuando se actualiza el incentivo para keepers externos
+     * @param oldIncentive Incentivo anterior en basis points
+     * @param newIncentive Nuevo incentivo en basis points
+     */
+    event KeeperIncentiveUpdated(uint256 oldIncentive, uint256 newIncentive);
+
     //* Funciones principales
 
     /**
@@ -198,6 +212,20 @@ interface IVault is IERC4626 {
      * @param newManager Nueva dirección del strategy manager (no puede ser address(0))
      */
     function setStrategyManager(address newManager) external;
+
+    /**
+     * @notice Actualiza el profit mínimo requerido para ejecutar harvest
+     * @dev Solo puede ser llamada por el owner del vault
+     * @param newMin Nuevo profit mínimo en assets
+     */
+    function setMinProfitForHarvest(uint256 newMin) external;
+
+    /**
+     * @notice Actualiza el incentivo para keepers externos que ejecuten harvest
+     * @dev Solo puede ser llamada por el owner del vault
+     * @param newIncentive Nuevo incentivo en basis points (debe ser <= BASIS_POINTS)
+     */
+    function setKeeperIncentive(uint256 newIncentive) external;
 
     //* Funciones de consulta - Getters de parámetros y treaury del protocolo
 
@@ -306,4 +334,20 @@ interface IVault is IERC4626 {
      * @return isOfficial True si es keeper oficial, false en caso contrario
      */
     function isOfficialKeeper(address keeper) external view returns (bool isOfficial);
+
+    /**
+     * @notice Devuelve el profit mínimo requerido para ejecutar harvest
+     * @dev Previene harvests no rentables donde el gas cost excede el profit generado.
+     *      Solo se ejecutará harvest si el profit total es mayor o igual a este threshold
+     * @return minProfit Profit mínimo en assets para ejecutar harvest
+     */
+    function minProfitForHarvest() external view returns (uint256 minProfit);
+
+    /**
+     * @notice Devuelve el porcentaje de incentivo para keepers externos
+     * @dev En basis points sobre el profit total. Los keepers externos que ejecuten harvest
+     *      reciben este porcentaje como recompensa. Los keepers oficiales no reciben incentivo
+     * @return incentiveBps Incentivo para keepers en basis points
+     */
+    function keeperIncentive() external view returns (uint256 incentiveBps);
 }

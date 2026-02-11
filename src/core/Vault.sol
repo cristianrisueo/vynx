@@ -498,6 +498,33 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
         emit OfficialKeeperUpdated(keeper, status);
     }
 
+    /**
+     * @notice Actualiza el profit minimo requerido para ejecutar harvest
+     * @param new_min Nuevo profit minimo en assets
+     */
+    function setMinProfitForHarvest(uint256 new_min) external onlyOwner {
+        // Emite evento con minimo anterior y nuevo
+        emit MinProfitForHarvestUpdated(min_profit_for_harvest, new_min);
+
+        // Actualiza el profit minimo
+        min_profit_for_harvest = new_min;
+    }
+
+    /**
+     * @notice Actualiza el incentivo para keepers externos
+     * @param new_incentive Nuevo incentivo en basis points
+     */
+    function setKeeperIncentive(uint256 new_incentive) external onlyOwner {
+        // Comprueba que el incentivo no exceda 100% (max = BASIS_POINTS)
+        if (new_incentive > BASIS_POINTS) revert Vault__InvalidPerformanceFee();
+
+        // Emite evento con incentivo anterior y nuevo
+        emit KeeperIncentiveUpdated(keeper_incentive, new_incentive);
+
+        // Actualiza el incentivo
+        keeper_incentive = new_incentive;
+    }
+
     //* Funciones administrativas: Emergency stop y resume del protocolo (onlyOwner)
 
     /**
@@ -612,6 +639,22 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
      */
     function totalHarvested() external view returns (uint256 totalProfit) {
         return total_harvested;
+    }
+
+    /**
+     * @notice Devuelve el profit minimo requerido para ejecutar harvest
+     * @return minProfit Profit minimo en assets
+     */
+    function minProfitForHarvest() external view returns (uint256 minProfit) {
+        return min_profit_for_harvest;
+    }
+
+    /**
+     * @notice Devuelve el incentivo para keepers externos
+     * @return incentiveBps Incentivo en basis points
+     */
+    function keeperIncentive() external view returns (uint256 incentiveBps) {
+        return keeper_incentive;
     }
 
     //* Funciones internas: Helpers para deposit/withdraw y fee distribution
