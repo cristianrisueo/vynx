@@ -108,13 +108,12 @@ contract Deploy is Script {
         manager.addStrategy(address(compound_strategy));
         console.log("Estrategias registradas: Aave + Compound");
 
-        // 8. Configura al deployer como keeper oficial
+        // 8. Configura al deployer como keeper oficial (address que llama al harvest sin cobrar fee)
         vault.setOfficialKeeper(deployer, true);
         console.log("Deployer configurado como keeper oficial");
 
         // Detiene el broadcast y muestra mensaje de deployment completado
         vm.stopBroadcast();
-
         console.log("=== Deploy completado ===");
     }
 }
