@@ -161,7 +161,7 @@ contract CompoundStrategyTest is Test {
      * @dev Comprueba que devuelva el nombre correcto
      */
     function test_Name() public view {
-        assertEq(strategy.name(), "Compound v3 WETH Strategy");
+        assertEq(strategy.name(), "Compound v3 Strategy");
     }
 
     /**

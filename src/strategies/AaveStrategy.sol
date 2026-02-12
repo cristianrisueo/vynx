@@ -197,7 +197,7 @@ contract AaveStrategy is IStrategy {
 
         // Reclama los rewards acumulados para el aToken en Aave. En caso de error revierte
         try rewards_controller.claimAllRewards(assets_to_claim, address(this)) returns (
-            address[] memory reward_tokens, uint256[] memory claimed_amounts
+            address[] memory, uint256[] memory claimed_amounts
         ) {
             // Si no hay rewards que reclamar, retorna 0
             if (claimed_amounts.length == 0 || claimed_amounts[0] == 0) {

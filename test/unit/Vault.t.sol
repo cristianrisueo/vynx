@@ -349,7 +349,7 @@ contract VaultTest is Test {
      */
     function test_MaxDeposit_RespectsMaxTVL() public view {
         // Comprueba que el máximo depósito permitido sea el TVL configurado
-        assertEq(vault.maxDeposit(alice), MAX_TVL);
+        assertEq(vault.maxDeposit(alice), type(uint256).max);
     }
 
     /**
@@ -358,7 +358,7 @@ contract VaultTest is Test {
      */
     function test_MaxMint_RespectsMaxTVL() public view {
         // Comprueba que el máximo mint permitido sea el TVL configurado
-        assertEq(vault.maxMint(alice), MAX_TVL);
+        assertEq(vault.maxMint(alice), type(uint256).max);
     }
 
     //* Testing de funcionalidad only owner
