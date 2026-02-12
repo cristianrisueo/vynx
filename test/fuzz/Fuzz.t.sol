@@ -2,7 +2,7 @@
 pragma solidity 0.8.33;
 
 import {Test} from "forge-std/Test.sol";
-import {StrategyVault} from "../../src/core/StrategyVault.sol";
+import {Vault} from "../../src/core/Vault.sol";
 import {StrategyManager} from "../../src/core/StrategyManager.sol";
 import {AaveStrategy} from "../../src/strategies/AaveStrategy.sol";
 import {CompoundStrategy} from "../../src/strategies/CompoundStrategy.sol";
@@ -19,7 +19,7 @@ contract FuzzTest is Test {
     //* Variables de estado
 
     /// @notice Instancias del protocolo: Vault, manager y estrategias
-    StrategyVault public vault;
+    Vault public vault;
     StrategyManager public manager;
     AaveStrategy public aave_strategy;
     CompoundStrategy public compound_strategy;
@@ -28,15 +28,20 @@ contract FuzzTest is Test {
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address constant COMPOUND_COMET = 0xA17581A9E3356d9A858b789D68B4d866e593aE94;
+    address constant AAVE_REWARDS = 0x8164Cc65827dcFe994AB23944CBC90e0aa80bFcb;
+    address constant COMPOUND_REWARDS = 0x1B0e765F6224C21223AeA2af16c1C46E38885a40;
+    address constant AAVE_TOKEN = 0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9;
+    address constant COMP_TOKEN = 0xc00e94Cb662C3520282E6f5717214004A7f26888;
+    address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    uint24 constant POOL_FEE = 3000;
 
     /// @notice Usuarios de prueba
     address public alice = makeAddr("alice");
-    address public fee_receiver;
+    address public founder;
 
     /// @notice Parámetros del vault
     uint256 constant MAX_TVL = 1000 ether;
     uint256 constant MIN_DEPOSIT = 0.01 ether;
-    uint256 constant WITHDRAWAL_FEE = 200;
 
     //* Setup del entorno de testing
 
@@ -48,17 +53,17 @@ contract FuzzTest is Test {
         // Crea un fork de Mainnet usando el endpoint de Alchemy
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Setea el fee receiver
-        fee_receiver = makeAddr("feeReceiver");
+        // Setea el founder
+        founder = makeAddr("founder");
 
         // Despliega y conecta vault y manager
         manager = new StrategyManager(WETH);
-        vault = new StrategyVault(WETH, address(manager), fee_receiver);
-        manager.initializeVault(address(vault));
+        vault = new Vault(WETH, address(manager), address(this), founder);
+        manager.initialize(address(vault));
 
         // Despliega estrategias con direcciones reales de Mainnet
-        aave_strategy = new AaveStrategy(address(manager), WETH, AAVE_POOL);
-        compound_strategy = new CompoundStrategy(address(manager), WETH, COMPOUND_COMET);
+        aave_strategy = new AaveStrategy(address(manager), AAVE_POOL, AAVE_REWARDS, WETH, AAVE_TOKEN, UNISWAP_ROUTER, POOL_FEE);
+        compound_strategy = new CompoundStrategy(address(manager), COMPOUND_COMET, COMPOUND_REWARDS, WETH, COMP_TOKEN, UNISWAP_ROUTER, POOL_FEE);
 
         // Conecta estrategias al manager
         manager.addStrategy(address(aave_strategy));
@@ -135,31 +140,6 @@ contract FuzzTest is Test {
     }
 
     /**
-     * @notice Fuzz: Para cualquier withdraw > 0, el fee receiver siempre cobra
-     * @dev El fee es el 2% del valor bruto. Para cualquier retiro válido, fee > 0
-     * @param amount Cantidad aleatoria depositada
-     */
-    function testFuzz_Withdraw_FeeAlwaysCollected(uint256 amount) public {
-        // Acota al rango válido. Necesitamos suficiente para que el fee no sea 0 por redondeo
-        amount = bound(amount, 1 ether, MAX_TVL);
-
-        // Deposita
-        _deposit(alice, amount);
-
-        // Guarda balance del fee receiver antes del retiro (0)
-        uint256 fee_before = IERC20(WETH).balanceOf(fee_receiver);
-
-        // Retira el 50% del depósito (suficiente para generar fee medible)
-        uint256 withdraw_amount = amount / 2;
-        vm.prank(alice);
-        vault.withdraw(withdraw_amount, alice, alice);
-
-        // Comprueba que el fee receiver cobró algo
-        uint256 fee_after = IERC20(WETH).balanceOf(fee_receiver);
-        assertGt(fee_after, fee_before, "Fee receiver deberia haber cobrado");
-    }
-
-    /**
      * @notice Fuzz: Redeem quema exactamente las shares indicadas
      * @dev Para cualquier cantidad de shares redimidas, el balance de shares decrece exactamente esa cantidad
      * @param amount Cantidad aleatoria depositada
@@ -191,8 +171,8 @@ contract FuzzTest is Test {
 
     /**
      * @notice Fuzz: Deposit → Redeem inmediato nunca genera profit
-     * @dev Un usuario no puede ganar depositando y retirando inmediatamente (el fee lo impide)
-     *      Para cualquier amount, assets_out < amount
+     * @dev Un usuario no puede ganar depositando y retirando inmediatamente
+     *      Para cualquier amount, assets_out <= amount (por posible pérdida de redondeo)
      * @param amount Cantidad aleatoria depositada
      */
     function testFuzz_DepositRedeem_NeverProfitable(uint256 amount) public {
@@ -205,7 +185,7 @@ contract FuzzTest is Test {
         vm.prank(alice);
         uint256 assets_out = vault.redeem(shares, alice, alice);
 
-        // Lo recibido siempre es menor que lo depositado (porque cobramos la fee del 2%)
-        assertLt(assets_out, amount, "Deposit-redeem no deberia ser profitable");
+        // Lo recibido nunca excede lo depositado (puede haber pérdida por redondeo)
+        assertLe(assets_out, amount, "Deposit-redeem no deberia ser profitable");
     }
 }

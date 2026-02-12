@@ -22,6 +22,10 @@ contract AaveStrategyTest is Test {
     /// @notice Direcciones de los contratos en Mainnet
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
+    address constant AAVE_REWARDS = 0x8164Cc65827dcFe994AB23944CBC90e0aa80bFcb;
+    address constant AAVE_TOKEN = 0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9;
+    address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    uint24 constant POOL_FEE = 3000;
 
     /// @notice Usuario de prueba
     address public alice = makeAddr("alice");
@@ -40,7 +44,7 @@ contract AaveStrategyTest is Test {
         manager = new StrategyManager(WETH);
 
         // Inicializa la estrategia
-        strategy = new AaveStrategy(address(manager), WETH, AAVE_POOL);
+        strategy = new AaveStrategy(address(manager), AAVE_POOL, AAVE_REWARDS, WETH, AAVE_TOKEN, UNISWAP_ROUTER, POOL_FEE);
     }
 
     //* Funciones internas helpers

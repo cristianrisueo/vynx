@@ -2,7 +2,7 @@
 pragma solidity 0.8.33;
 
 import {Test} from "forge-std/Test.sol";
-import {StrategyVault} from "../../src/core/StrategyVault.sol";
+import {Vault} from "../../src/core/Vault.sol";
 import {StrategyManager} from "../../src/core/StrategyManager.sol";
 import {AaveStrategy} from "../../src/strategies/AaveStrategy.sol";
 import {CompoundStrategy} from "../../src/strategies/CompoundStrategy.sol";
@@ -22,7 +22,7 @@ contract InvariantsTest is Test {
     //* Variables de estado
 
     /// @notice Instancias del protocolo
-    StrategyVault public vault;
+    Vault public vault;
     StrategyManager public manager;
     AaveStrategy public aave_strategy;
     CompoundStrategy public compound_strategy;
@@ -32,6 +32,12 @@ contract InvariantsTest is Test {
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address constant COMPOUND_COMET = 0xA17581A9E3356d9A858b789D68B4d866e593aE94;
+    address constant AAVE_REWARDS = 0x8164Cc65827dcFe994AB23944CBC90e0aa80bFcb;
+    address constant COMPOUND_REWARDS = 0x1B0e765F6224C21223AeA2af16c1C46E38885a40;
+    address constant AAVE_TOKEN = 0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9;
+    address constant COMP_TOKEN = 0xc00e94Cb662C3520282E6f5717214004A7f26888;
+    address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    uint24 constant POOL_FEE = 3000;
 
     /// @notice Lista de usuarios simulados
     address[] public actors;
@@ -46,17 +52,17 @@ contract InvariantsTest is Test {
         // Crea un fork de Mainnet
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Setea el fee receiver
-        address fee_receiver = makeAddr("feeReceiver");
-
         // Despliega y conecta vault y manager
         manager = new StrategyManager(WETH);
-        vault = new StrategyVault(WETH, address(manager), fee_receiver);
-        manager.initializeVault(address(vault));
+        vault = new Vault(WETH, address(manager), address(this), makeAddr("founder"));
+        manager.initialize(address(vault));
+
+        // Configura al test contract como keeper oficial
+        vault.setOfficialKeeper(address(this), true);
 
         // Despliega estrategias con direcciones reales de Mainnet
-        aave_strategy = new AaveStrategy(address(manager), WETH, AAVE_POOL);
-        compound_strategy = new CompoundStrategy(address(manager), WETH, COMPOUND_COMET);
+        aave_strategy = new AaveStrategy(address(manager), AAVE_POOL, AAVE_REWARDS, WETH, AAVE_TOKEN, UNISWAP_ROUTER, POOL_FEE);
+        compound_strategy = new CompoundStrategy(address(manager), COMPOUND_COMET, COMPOUND_REWARDS, WETH, COMP_TOKEN, UNISWAP_ROUTER, POOL_FEE);
 
         // Conecta estrategias al manager
         manager.addStrategy(address(aave_strategy));
@@ -95,12 +101,12 @@ contract InvariantsTest is Test {
 
     /**
      * @notice Invariante: La contabilidad siempre cuadra (idle + manager = totalAssets)
-     * @dev El vault reporta totalAssets como idle_weth + manager.totalAssets()
+     * @dev El vault reporta totalAssets como idle_buffer + manager.totalAssets()
      *      Si esto no cuadra, hay fondos fantasma o fondos perdidos
      */
     function invariant_AccountingIsConsistent() public view {
         // Obtenemos los assets del IDLE buffer, el manager (depósitos en estrategias) y el TVL del protocolo
-        uint256 idle = vault.idle_weth();
+        uint256 idle = vault.idle_buffer();
         uint256 manager_assets = manager.totalAssets();
         uint256 total_assets = vault.totalAssets();
 

@@ -2,23 +2,23 @@
 pragma solidity 0.8.33;
 
 import {Test} from "forge-std/Test.sol";
-import {StrategyVault} from "../../src/core/StrategyVault.sol";
+import {Vault} from "../../src/core/Vault.sol";
 import {StrategyManager} from "../../src/core/StrategyManager.sol";
 import {AaveStrategy} from "../../src/strategies/AaveStrategy.sol";
 import {CompoundStrategy} from "../../src/strategies/CompoundStrategy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
- * @title StrategyVaultTest
+ * @title VaultTest
  * @author cristianrisueo
- * @notice Tests unitarios para StrategyVault con fork de Mainnet
+ * @notice Tests unitarios para Vault con fork de Mainnet
  * @dev Fork test de mainnet, aquí no hay mierdas
  */
-contract StrategyVaultTest is Test {
+contract VaultTest is Test {
     //* Variables de estado
 
-    /// @notice Instancia del vault, manager y estrategias
-    StrategyVault public vault;
+    /// @notice Instancia del vault, manager y estrategias
+    Vault public vault;
     StrategyManager public manager;
     AaveStrategy public aave_strategy;
     CompoundStrategy public compound_strategy;
@@ -27,15 +27,20 @@ contract StrategyVaultTest is Test {
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address constant COMPOUND_COMET = 0xA17581A9E3356d9A858b789D68B4d866e593aE94;
+    address constant AAVE_REWARDS = 0x8164Cc65827dcFe994AB23944CBC90e0aa80bFcb;
+    address constant COMPOUND_REWARDS = 0x1B0e765F6224C21223AeA2af16c1C46E38885a40;
+    address constant AAVE_TOKEN = 0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9;
+    address constant COMP_TOKEN = 0xc00e94Cb662C3520282E6f5717214004A7f26888;
+    address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    uint24 constant POOL_FEE = 3000;
 
     /// @notice Usuarios de prueba
     address public alice = makeAddr("alice");
     address public bob = makeAddr("bob");
-    address public fee_receiver;
+    address public founder;
 
     /// @notice Parámetros del vault
     uint256 constant MAX_TVL = 1000 ether;
-    uint256 constant WITHDRAWAL_FEE = 200;
 
     //* Setup del entorno de testing
 
@@ -48,17 +53,17 @@ contract StrategyVaultTest is Test {
         // Crea un fork de Mainnet usando mi endpoint de Alchemy en env.var
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Setea el fee receiver
-        fee_receiver = makeAddr("feeReceiver");
+        // Setea el founder
+        founder = makeAddr("founder");
 
         // Inicializa el manager, vault y setea el address del vault en el manager
         manager = new StrategyManager(WETH);
-        vault = new StrategyVault(WETH, address(manager), fee_receiver);
-        manager.initializeVault(address(vault));
+        vault = new Vault(WETH, address(manager), address(this), founder);
+        manager.initialize(address(vault));
 
         // Inicializa las estrategias con las direcciones reales de mainnet
-        aave_strategy = new AaveStrategy(address(manager), WETH, AAVE_POOL);
-        compound_strategy = new CompoundStrategy(address(manager), WETH, COMPOUND_COMET);
+        aave_strategy = new AaveStrategy(address(manager), AAVE_POOL, AAVE_REWARDS, WETH, AAVE_TOKEN, UNISWAP_ROUTER, POOL_FEE);
+        compound_strategy = new CompoundStrategy(address(manager), COMPOUND_COMET, COMPOUND_REWARDS, WETH, COMP_TOKEN, UNISWAP_ROUTER, POOL_FEE);
 
         // Añade las estrategias
         manager.addStrategy(address(aave_strategy));
@@ -113,7 +118,7 @@ contract StrategyVaultTest is Test {
         // Comprueba shares recibidas por Alice, assets en el vault y assets en el buffer idle
         assertEq(vault.balanceOf(alice), shares);
         assertEq(vault.totalAssets(), amount);
-        assertEq(vault.idle_weth(), amount);
+        assertEq(vault.idle_buffer(), amount);
     }
 
     /**
@@ -125,7 +130,7 @@ contract StrategyVaultTest is Test {
         _deposit(alice, vault.idle_threshold());
 
         // Comprueba que tanto el vault cómo el buffer IDLE no tiene WETH
-        assertEq(vault.idle_weth(), 0);
+        assertEq(vault.idle_buffer(), 0);
         assertGt(manager.totalAssets(), 0);
     }
 
@@ -138,7 +143,7 @@ contract StrategyVaultTest is Test {
         vm.prank(alice);
 
         // Espera el error y deposita
-        vm.expectRevert(StrategyVault.StrategyVault__ZeroAmount.selector);
+        vm.expectRevert(Vault.Vault__DepositBelowMinimum.selector);
         vault.deposit(0, alice);
     }
 
@@ -155,7 +160,7 @@ contract StrategyVaultTest is Test {
         IERC20(WETH).approve(address(vault), 0.005 ether);
 
         // Espera el error y deposita
-        vm.expectRevert(StrategyVault.StrategyVault__BelowMinDeposit.selector);
+        vm.expectRevert(Vault.Vault__DepositBelowMinimum.selector);
         vault.deposit(0.005 ether, alice);
 
         vm.stopPrank();
@@ -174,7 +179,7 @@ contract StrategyVaultTest is Test {
         IERC20(WETH).approve(address(vault), MAX_TVL + 1);
 
         // Espera el error y deposita
-        vm.expectRevert(StrategyVault.StrategyVault__MaxTVLExceeded.selector);
+        vm.expectRevert(Vault.Vault__MaxTVLExceeded.selector);
         vault.deposit(MAX_TVL + 1, alice);
 
         vm.stopPrank();
@@ -233,7 +238,7 @@ contract StrategyVaultTest is Test {
         vm.prank(alice);
 
         // Espera el error y mintea 0 shares
-        vm.expectRevert(StrategyVault.StrategyVault__ZeroAmount.selector);
+        vm.expectRevert(Vault.Vault__DepositBelowMinimum.selector);
         vault.mint(0, alice);
     }
 
@@ -271,41 +276,6 @@ contract StrategyVaultTest is Test {
     }
 
     /**
-     * @notice Test de cálculo de fee de retiro
-     * @dev Comprueba que el fee se descuente correctamente del balance del fee receiver
-     */
-    function test_Withdraw_FeeCalculation() public {
-        // Deposita 100 WETH para tener margen
-        _deposit(alice, 100 ether);
-
-        // Guarda el balance previo del fee receiver
-        uint256 fee_before = IERC20(WETH).balanceOf(fee_receiver);
-
-        // Retira 50 WETH
-        _withdraw(alice, 50 ether);
-
-        // Calcula el fee esperado basado en la constante
-        uint256 expected_fee = (50 ether * WITHDRAWAL_FEE) / (10000 - WITHDRAWAL_FEE);
-
-        // Comprueba que el fee real coincida con el esperado
-        uint256 actual_fee = IERC20(WETH).balanceOf(fee_receiver) - fee_before;
-        assertEq(actual_fee, expected_fee);
-    }
-
-    /**
-     * @notice Test de retiro de cantidad cero
-     * @dev Comprueba que se revierta con el error esperado al retirar 0
-     */
-    function test_Withdraw_RevertZero() public {
-        // Utiliza el address de Alice
-        vm.prank(alice);
-
-        // Espera el error y retira 0
-        vm.expectRevert(StrategyVault.StrategyVault__ZeroAmount.selector);
-        vault.withdraw(0, alice, alice);
-    }
-
-    /**
      * @notice Test de retiro cuando el vault está pausado
      * @dev Comprueba que se revierta al intentar retirar estando pausado
      */
@@ -335,23 +305,9 @@ contract StrategyVaultTest is Test {
         vm.prank(alice);
         uint256 assets = vault.redeem(shares, alice, alice);
 
-        // Comprueba que se quemaron las shares y se recibieron assets (menos fee)
+        // Comprueba que se quemaron las shares y se recibieron assets (sin fee, devuelve lo depositado)
         assertEq(vault.balanceOf(alice), 0);
-        assertGt(assets, 0);
-        assertLt(assets, 5 ether);
-    }
-
-    /**
-     * @notice Test de redeem de cantidad cero
-     * @dev Comprueba que se revierta al intentar redimir 0 shares
-     */
-    function test_Redeem_RevertZero() public {
-        // Utiliza el address de Alice
-        vm.prank(alice);
-
-        // Espera el error y redime 0 shares
-        vm.expectRevert(StrategyVault.StrategyVault__ZeroAmount.selector);
-        vault.redeem(0, alice, alice);
+        assertEq(assets, 5 ether);
     }
 
     //* Testing de allocation
@@ -365,7 +321,7 @@ contract StrategyVaultTest is Test {
         _deposit(alice, 1 ether);
 
         // Espera error al intentar allocation manual sin llegar al mínimo
-        vm.expectRevert(StrategyVault.StrategyVault__IdleBelowThreshold.selector);
+        vm.expectRevert(Vault.Vault__InsufficientIdleBuffer.selector);
         vault.allocateIdle();
     }
 
@@ -423,9 +379,15 @@ contract StrategyVaultTest is Test {
         vm.expectRevert();
         vault.setMinDeposit(0.1 ether);
         vm.expectRevert();
-        vault.setWithdrawalFee(300);
+        vault.setPerformanceFee(1500);
         vm.expectRevert();
-        vault.setWithdrawalFeeReceiver(alice);
+        vault.setFeeSplit(7000, 3000);
+        vm.expectRevert();
+        vault.setOfficialKeeper(alice, true);
+        vm.expectRevert();
+        vault.setMinProfitForHarvest(0.5 ether);
+        vm.expectRevert();
+        vault.setKeeperIncentive(200);
         vm.expectRevert();
         vault.pause();
         vm.stopPrank();
@@ -434,8 +396,11 @@ contract StrategyVaultTest is Test {
         vault.setIdleThreshold(20 ether);
         vault.setMaxTVL(2000 ether);
         vault.setMinDeposit(0.1 ether);
-        vault.setWithdrawalFee(300);
-        vault.setWithdrawalFeeReceiver(alice);
+        vault.setPerformanceFee(1500);
+        vault.setFeeSplit(7000, 3000);
+        vault.setOfficialKeeper(alice, true);
+        vault.setMinProfitForHarvest(0.5 ether);
+        vault.setKeeperIncentive(200);
         vault.pause();
         vault.unpause();
 
@@ -443,35 +408,118 @@ contract StrategyVaultTest is Test {
         assertEq(vault.idle_threshold(), 20 ether);
         assertEq(vault.max_tvl(), 2000 ether);
         assertEq(vault.min_deposit(), 0.1 ether);
-        assertEq(vault.withdrawal_fee(), 300);
-        assertEq(vault.fee_receiver(), alice);
+        assertEq(vault.performance_fee(), 1500);
+        assertEq(vault.treasury_split(), 7000);
+        assertEq(vault.founder_split(), 3000);
+        assertTrue(vault.isOfficialKeeper(alice));
+        assertEq(vault.min_profit_for_harvest(), 0.5 ether);
+        assertEq(vault.keeper_incentive(), 200);
     }
 
-    //* Testing de funciones preview
+    //* Testing de harvest y distribución de fees
 
     /**
-     * @notice Test de preview withdraw incluye fee
-     * @dev Comprueba que se necesiten más shares que assets por el fee
+     * @notice Test harvest con keeper externo (debe recibir incentivo)
      */
-    function test_Preview_WithdrawIncludesFee() public {
-        // Setup inicial
-        _deposit(alice, 100 ether);
+    function test_HarvestWithExternalKeeper() public {
+        // Setup: depositar y generar profit
+        deal(WETH, alice, 100 ether);
+        vm.startPrank(alice);
+        IERC20(WETH).approve(address(vault), 100 ether);
+        vault.deposit(100 ether, alice);
+        vm.stopPrank();
 
-        // Comprueba que shares requeridas sean mayores a assets retirados
-        uint256 shares_needed = vault.previewWithdraw(50 ether);
-        assertGt(shares_needed, 50 ether);
+        // Simular profit en estrategias
+        skip(7 days);
+
+        // Keeper externo ejecuta harvest
+        address keeper = makeAddr("keeper");
+        uint256 keeper_balance_before = IERC20(WETH).balanceOf(keeper);
+
+        vm.prank(keeper);
+        uint256 profit = vault.harvest();
+
+        // Verificar que keeper recibio incentivo
+        uint256 keeper_balance_after = IERC20(WETH).balanceOf(keeper);
+        uint256 keeper_reward = keeper_balance_after - keeper_balance_before;
+
+        assertGt(keeper_reward, 0, "Keeper debe recibir incentivo");
+        assertEq(keeper_reward, (profit * vault.keeper_incentive()) / vault.BASIS_POINTS());
     }
 
     /**
-     * @notice Test de preview redeem deduce fee
-     * @dev Comprueba que se reciban menos assets que shares por el fee
+     * @notice Test harvest con keeper oficial (NO debe recibir incentivo)
      */
-    function test_Preview_RedeemDeductsFee() public {
-        // Setup inicial y obtención de shares
-        uint256 shares = _deposit(alice, 100 ether);
+    function test_HarvestWithOfficialKeeper() public {
+        // Setup y generar profit igual que antes
+        deal(WETH, alice, 100 ether);
+        vm.startPrank(alice);
+        IERC20(WETH).approve(address(vault), 100 ether);
+        vault.deposit(100 ether, alice);
+        vm.stopPrank();
 
-        // Comprueba que assets recibidos sean menores a shares quemadas
-        uint256 assets_received = vault.previewRedeem(shares);
-        assertLt(assets_received, 100 ether);
+        skip(7 days);
+
+        // Configurar keeper oficial
+        address official_keeper = makeAddr("official");
+        vault.setOfficialKeeper(official_keeper, true);
+
+        // Keeper oficial ejecuta harvest
+        uint256 keeper_balance_before = IERC20(WETH).balanceOf(official_keeper);
+
+        vm.prank(official_keeper);
+        vault.harvest();
+
+        // Verificar que NO recibio incentivo
+        uint256 keeper_balance_after = IERC20(WETH).balanceOf(official_keeper);
+        assertEq(keeper_balance_after, keeper_balance_before, "Keeper oficial no debe recibir incentivo");
+    }
+
+    /**
+     * @notice Test distribucion de fees: treasury recibe shares, founder recibe assets
+     */
+    function test_FeeDistribution() public {
+        address treasury = vault.treasury_address();
+        address _founder = vault.founder_address();
+
+        // Setup y generar profit
+        deal(WETH, alice, 100 ether);
+        vm.startPrank(alice);
+        IERC20(WETH).approve(address(vault), 100 ether);
+        vault.deposit(100 ether, alice);
+        vm.stopPrank();
+
+        skip(7 days);
+
+        // Balances antes de harvest
+        uint256 treasury_shares_before = vault.balanceOf(treasury);
+        uint256 founder_weth_before = IERC20(WETH).balanceOf(_founder);
+
+        // Harvest como keeper oficial (sin incentivo)
+        vault.setOfficialKeeper(address(this), true);
+        uint256 profit = vault.harvest();
+
+        // Verificar: treasury recibio SHARES, founder recibio WETH
+        uint256 treasury_shares_after = vault.balanceOf(treasury);
+        uint256 founder_weth_after = IERC20(WETH).balanceOf(_founder);
+
+        assertGt(treasury_shares_after, treasury_shares_before, "Treasury debe recibir shares");
+        assertGt(founder_weth_after, founder_weth_before, "Founder debe recibir WETH");
+
+        // Verificar splits correctos
+        uint256 perf_fee = (profit * vault.performance_fee()) / vault.BASIS_POINTS();
+        uint256 expected_treasury = (perf_fee * vault.treasury_split()) / vault.BASIS_POINTS();
+        uint256 expected_founder = (perf_fee * vault.founder_split()) / vault.BASIS_POINTS();
+
+        assertApproxEqRel(
+            vault.convertToAssets(treasury_shares_after - treasury_shares_before),
+            expected_treasury,
+            0.01e18 // 1% tolerance
+        );
+        assertApproxEqRel(
+            founder_weth_after - founder_weth_before,
+            expected_founder,
+            0.01e18
+        );
     }
 }

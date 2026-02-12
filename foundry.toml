@@ -17,4 +17,5 @@ remappings = [
     "@aave/contracts/=lib/aave-v3-core/contracts/",
     "@aave/periphery/contracts/=lib/aave-v3-periphery/contracts/", 
     "@uniswap/v3-periphery/contracts/=lib/v3-periphery/contracts/",
+    "@uniswap/v3-core/contracts/=lib/v3-core/contracts/",
 ]

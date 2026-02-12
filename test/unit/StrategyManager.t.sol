@@ -3,7 +3,7 @@ pragma solidity 0.8.33;
 
 import {Test} from "forge-std/Test.sol";
 import {StrategyManager} from "../../src/core/StrategyManager.sol";
-import {StrategyVault} from "../../src/core/StrategyVault.sol";
+import {Vault} from "../../src/core/Vault.sol";
 import {AaveStrategy} from "../../src/strategies/AaveStrategy.sol";
 import {CompoundStrategy} from "../../src/strategies/CompoundStrategy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -19,7 +19,7 @@ contract StrategyManagerTest is Test {
 
     /// @notice Instancia del manager, vault y estrategias
     StrategyManager public manager;
-    StrategyVault public vault;
+    Vault public vault;
     AaveStrategy public aave_strategy;
     CompoundStrategy public compound_strategy;
 
@@ -27,10 +27,16 @@ contract StrategyManagerTest is Test {
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address constant COMPOUND_COMET = 0xA17581A9E3356d9A858b789D68B4d866e593aE94;
+    address constant AAVE_REWARDS = 0x8164Cc65827dcFe994AB23944CBC90e0aa80bFcb;
+    address constant COMPOUND_REWARDS = 0x1B0e765F6224C21223AeA2af16c1C46E38885a40;
+    address constant AAVE_TOKEN = 0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9;
+    address constant COMP_TOKEN = 0xc00e94Cb662C3520282E6f5717214004A7f26888;
+    address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    uint24 constant POOL_FEE = 3000;
 
     /// @notice Usuarios de prueba
     address public alice = makeAddr("alice");
-    address public fee_receiver;
+    address public treasury;
 
     //* Setup del entorno de testing
 
@@ -42,17 +48,17 @@ contract StrategyManagerTest is Test {
         // Crea un fork de Mainnet
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Setea el fee receiver
-        fee_receiver = makeAddr("feeReceiver");
+        // Setea el treasury
+        treasury = makeAddr("treasury");
 
         // Inicializa el manager y vault
         manager = new StrategyManager(WETH);
-        vault = new StrategyVault(WETH, address(manager), fee_receiver);
-        manager.initializeVault(address(vault));
+        vault = new Vault(WETH, address(manager), treasury, makeAddr("founder"));
+        manager.initialize(address(vault));
 
         // Inicializa las estrategias
-        aave_strategy = new AaveStrategy(address(manager), WETH, AAVE_POOL);
-        compound_strategy = new CompoundStrategy(address(manager), WETH, COMPOUND_COMET);
+        aave_strategy = new AaveStrategy(address(manager), AAVE_POOL, AAVE_REWARDS, WETH, AAVE_TOKEN, UNISWAP_ROUTER, POOL_FEE);
+        compound_strategy = new CompoundStrategy(address(manager), COMPOUND_COMET, COMPOUND_REWARDS, WETH, COMP_TOKEN, UNISWAP_ROUTER, POOL_FEE);
 
         // Añade las estrategias
         manager.addStrategy(address(aave_strategy));
@@ -95,7 +101,7 @@ contract StrategyManagerTest is Test {
     function test_InitializeVault_RevertIfAlreadyInitialized() public {
         // Intenta inicializar de nuevo
         vm.expectRevert(StrategyManager.StrategyManager__VaultAlreadyInitialized.selector);
-        manager.initializeVault(alice);
+        manager.initialize(alice);
     }
 
     //* Testing de allocation
@@ -144,7 +150,7 @@ contract StrategyManagerTest is Test {
     function test_Allocate_RevertNoStrategies() public {
         // Crea un nuevo manager sin estrategias
         StrategyManager empty_manager = new StrategyManager(WETH);
-        empty_manager.initializeVault(address(vault));
+        empty_manager.initialize(address(vault));
 
         vm.prank(address(vault));
         vm.expectRevert(StrategyManager.StrategyManager__NoStrategiesAvailable.selector);
@@ -223,8 +229,8 @@ contract StrategyManagerTest is Test {
      * @dev Comprueba que se pueda remover una estrategia
      */
     function test_RemoveStrategy_Basic() public {
-        // Remueve estrategia
-        manager.removeStrategy(address(aave_strategy));
+        // Remueve estrategia (index 0 = aave)
+        manager.removeStrategy(0);
 
         // Comprueba que se removió
         assertEq(manager.strategiesCount(), 1);
@@ -237,7 +243,7 @@ contract StrategyManagerTest is Test {
      */
     function test_RemoveStrategy_RevertNotFound() public {
         vm.expectRevert(StrategyManager.StrategyManager__StrategyNotFound.selector);
-        manager.removeStrategy(alice);
+        manager.removeStrategy(99);
     }
 
     //* Testing de rebalance
@@ -346,8 +352,6 @@ contract StrategyManagerTest is Test {
         vm.expectRevert();
         manager.setMinTVLForRebalance(20 ether);
         vm.expectRevert();
-        manager.setGasCostMultiplier(300);
-        vm.expectRevert();
         manager.setMaxAllocationPerStrategy(6000);
         vm.expectRevert();
         manager.setMinAllocationThreshold(500);
@@ -358,14 +362,12 @@ contract StrategyManagerTest is Test {
         // Ejecuta como owner (debería funcionar)
         manager.setRebalanceThreshold(300);
         manager.setMinTVLForRebalance(20 ether);
-        manager.setGasCostMultiplier(300);
         manager.setMaxAllocationPerStrategy(6000);
         manager.setMinAllocationThreshold(500);
 
         // Comprueba valores actualizados
         assertEq(manager.rebalance_threshold(), 300);
         assertEq(manager.min_tvl_for_rebalance(), 20 ether);
-        assertEq(manager.gas_cost_multiplier(), 300);
         assertEq(manager.max_allocation_per_strategy(), 6000);
         assertEq(manager.min_allocation_threshold(), 500);
     }

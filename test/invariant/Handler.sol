@@ -2,7 +2,7 @@
 pragma solidity 0.8.33;
 
 import {Test} from "forge-std/Test.sol";
-import {StrategyVault} from "../../src/core/StrategyVault.sol";
+import {Vault} from "../../src/core/Vault.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
@@ -17,7 +17,7 @@ contract Handler is Test {
     //* Variables de estado
 
     /// @notice Instancia del vault a testear
-    StrategyVault public vault;
+    Vault public vault;
 
     /// @notice Dirección del contrato WETH en Mainnet
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
@@ -36,7 +36,7 @@ contract Handler is Test {
      * @param _vault Instancia del vault a testear
      * @param _actors Lista de direcciones que pueden interactuar
      */
-    constructor(StrategyVault _vault, address[] memory _actors) {
+    constructor(Vault _vault, address[] memory _actors) {
         vault = _vault;
         actors = _actors;
     }
@@ -114,5 +114,19 @@ contract Handler is Test {
 
         // Actualiza ghost variable
         ghost_totalWithdrawn += amount;
+    }
+
+    /**
+     * @notice Acción: Ejecuta harvest (cosecha rewards de estrategias)
+     * @dev Accion aleatoria 3: keeper ejecuta harvest si hay profit minimo
+     */
+    function harvest() external {
+        // Skip tiempo para acumular yield
+        skip(bound(block.timestamp, 1 days, 7 days));
+
+        // Solo harvest si hay suficiente profit
+        if (vault.totalAssets() > vault.min_profit_for_harvest()) {
+            vault.harvest();
+        }
     }
 }

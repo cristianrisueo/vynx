@@ -215,7 +215,7 @@ contract AaveStrategy is IStrategy {
                 fee: pool_fee, // Fee tier (con estos 3 ya hemos decidido el pool)
                 recipient: address(this), // Address que recibe el swap (este contrato)
                 deadline: block.timestamp, // A ejecutar en este bloque
-                amountIn: reward_amount, // Cantidad del token A a swapear
+                amountIn: claimed_amounts[0], // Cantidad del token A a swapear
                 amountOutMinimum: min_amount_out, // Mínima cantidad esperada del Token B
                 sqrtPriceLimitX96: 0 // Ni puta idea
             });

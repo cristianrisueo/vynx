@@ -22,6 +22,10 @@ contract CompoundStrategyTest is Test {
     /// @notice Direcciones de los contratos en Mainnet
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant COMPOUND_COMET = 0xA17581A9E3356d9A858b789D68B4d866e593aE94;
+    address constant COMPOUND_REWARDS = 0x1B0e765F6224C21223AeA2af16c1C46E38885a40;
+    address constant COMP_TOKEN = 0xc00e94Cb662C3520282E6f5717214004A7f26888;
+    address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    uint24 constant POOL_FEE = 3000;
 
     /// @notice Usuario de prueba
     address public alice = makeAddr("alice");
@@ -40,7 +44,7 @@ contract CompoundStrategyTest is Test {
         manager = new StrategyManager(WETH);
 
         // Inicializa la estrategia
-        strategy = new CompoundStrategy(address(manager), WETH, COMPOUND_COMET);
+        strategy = new CompoundStrategy(address(manager), COMPOUND_COMET, COMPOUND_REWARDS, WETH, COMP_TOKEN, UNISWAP_ROUTER, POOL_FEE);
     }
 
     //* Funciones internas helpers

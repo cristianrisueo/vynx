@@ -2,7 +2,7 @@
 pragma solidity 0.8.33;
 
 import {Test} from "forge-std/Test.sol";
-import {StrategyVault} from "../../src/core/StrategyVault.sol";
+import {Vault} from "../../src/core/Vault.sol";
 import {StrategyManager} from "../../src/core/StrategyManager.sol";
 import {AaveStrategy} from "../../src/strategies/AaveStrategy.sol";
 import {CompoundStrategy} from "../../src/strategies/CompoundStrategy.sol";
@@ -18,7 +18,7 @@ contract FullFlowTest is Test {
     //* Variables de estado
 
     /// @notice Instancias del protocolo: Vault, manager y estrategias
-    StrategyVault public vault;
+    Vault public vault;
     StrategyManager public manager;
     AaveStrategy public aave_strategy;
     CompoundStrategy public compound_strategy;
@@ -27,14 +27,17 @@ contract FullFlowTest is Test {
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address constant COMPOUND_COMET = 0xA17581A9E3356d9A858b789D68B4d866e593aE94;
+    address constant AAVE_REWARDS = 0x8164Cc65827dcFe994AB23944CBC90e0aa80bFcb;
+    address constant COMPOUND_REWARDS = 0x1B0e765F6224C21223AeA2af16c1C46E38885a40;
+    address constant AAVE_TOKEN = 0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9;
+    address constant COMP_TOKEN = 0xc00e94Cb662C3520282E6f5717214004A7f26888;
+    address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    uint24 constant POOL_FEE = 3000;
 
     /// @notice Usuarios de prueba
     address public alice = makeAddr("alice");
     address public bob = makeAddr("bob");
-    address public fee_receiver;
-
-    /// @notice Parámetros del vault
-    uint256 constant WITHDRAWAL_FEE = 200;
+    address public founder;
 
     //* Setup del entorno de testing
 
@@ -46,17 +49,20 @@ contract FullFlowTest is Test {
         // Crea un fork de Mainnet usando el endpoint de Alchemy
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Setea el fee receiver
-        fee_receiver = makeAddr("feeReceiver");
+        // Setea el founder
+        founder = makeAddr("founder");
 
         // Despliega y conecta vault y manager
         manager = new StrategyManager(WETH);
-        vault = new StrategyVault(WETH, address(manager), fee_receiver);
-        manager.initializeVault(address(vault));
+        vault = new Vault(WETH, address(manager), address(this), founder);
+        manager.initialize(address(vault));
+
+        // Configura al test contract como keeper oficial
+        vault.setOfficialKeeper(address(this), true);
 
         // Despliega estrategias con direcciones reales de Mainnet
-        aave_strategy = new AaveStrategy(address(manager), WETH, AAVE_POOL);
-        compound_strategy = new CompoundStrategy(address(manager), WETH, COMPOUND_COMET);
+        aave_strategy = new AaveStrategy(address(manager), AAVE_POOL, AAVE_REWARDS, WETH, AAVE_TOKEN, UNISWAP_ROUTER, POOL_FEE);
+        compound_strategy = new CompoundStrategy(address(manager), COMPOUND_COMET, COMPOUND_REWARDS, WETH, COMP_TOKEN, UNISWAP_ROUTER, POOL_FEE);
 
         // Conecta estrategias al manager
         manager.addStrategy(address(aave_strategy));
@@ -111,7 +117,7 @@ contract FullFlowTest is Test {
         _deposit(alice, deposit_amount);
 
         // Comprueba que: Idle buffer del vault vacío, assets en las estrategias mayores que 0
-        assertEq(vault.idle_weth(), 0, "Idle buffer deberia estar vacio tras allocation");
+        assertEq(vault.idle_buffer(), 0, "Idle buffer deberia estar vacio tras allocation");
         assertGt(aave_strategy.totalAssets(), 0, "Aave deberia tener fondos");
         assertGt(compound_strategy.totalAssets(), 0, "Compound deberia tener fondos");
 
@@ -125,9 +131,6 @@ contract FullFlowTest is Test {
 
         // Comprueba que Alice recibió la cantidad neta a retirar
         assertEq(IERC20(WETH).balanceOf(alice), withdraw_amount, "Alice no recibio WETH");
-
-        // Comprueba que el fee receiver recibió algo (su balance mayor que 0)
-        assertGt(IERC20(WETH).balanceOf(fee_receiver), 0, "Fee receiver deberia haber cobrado");
 
         // Comprueba que Alice aún tiene shares por el resto no retirado
         assertGt(vault.balanceOf(alice), 0, "Alice deberia tener shares restantes");
@@ -255,8 +258,8 @@ contract FullFlowTest is Test {
             compound_strategy.withdraw(compound_assets);
         }
 
-        // Elimina la estrategia de Compound y comprueba que solo quede 1 estrategia disponible (Aave)
-        manager.removeStrategy(address(compound_strategy));
+        // Elimina la estrategia de Compound (index 1) y comprueba que solo quede 1 estrategia disponible (Aave)
+        manager.removeStrategy(1);
         assertEq(manager.strategiesCount(), 1, "Deberia quedar 1 estrategia");
 
         // Guarda el balance de WETH en la estrtegia de Aave y se retira la mitad. Tras eliminar una
