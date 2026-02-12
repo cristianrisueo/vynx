@@ -90,38 +90,88 @@ vynx/
 
 ## Testing
 
-69 tests ejecutados contra fork de Ethereum Mainnet real (sin mocks).
+93 tests ejecutados contra fork de Ethereum Mainnet real (sin mocks). Los tests cubren flujos unitarios, integracion end-to-end, fuzz testing stateless e invariant testing stateful.
 
 ```bash
 # Configurar RPC
 export MAINNET_RPC_URL="https://eth-mainnet.g.alchemy.com/v2/<API_KEY>"
 
-# Ejecutar unit + integration + fuzz (69 tests)
-forge test --fork-url $MAINNET_RPC_URL -vv
+# Ejecutar unit + integration + fuzz (93 tests)
+forge test --no-match-path "test/invariant/*" -vv
 
 # Ejecutar invariant tests via Anvil (3 invariantes)
+# Los invariant tests generan un volumen alto de llamadas RPC.
+# El script lanza Anvil como proxy local con rate limiting controlado
 ./script/run_invariants_offline.sh
 
-# Coverage
-forge coverage --fork-url $MAINNET_RPC_URL
+# Coverage (excluyendo invariantes)
+forge coverage --no-match-path "test/invariant/*"
 ```
 
 | Capa | Tests | Ficheros |
 |------|-------|----------|
-| Unit | 59 | `test/unit/*.t.sol` |
+| Unit | 73 | `test/unit/Vault.t.sol`, `test/unit/StrategyManager.t.sol`, `test/unit/AaveStrategy.t.sol`, `test/unit/CompoundStrategy.t.sol` |
 | Integration | 6 | `test/integration/FullFlow.t.sol` |
-| Fuzz | 4 | `test/fuzz/Fuzz.t.sol` |
-| Invariant | 3 | `test/invariant/Invariants.t.sol` |
+| Fuzz | 4 (256 runs c/u) | `test/fuzz/Fuzz.t.sol` |
+| Invariant | 3 (32 runs x 15 depth) | `test/invariant/Invariants.t.sol` |
+
+### Resultados de Invariant Tests
+
+Los invariant tests ejecutan 32 runs con depth 15 (480 llamadas totales) para verificar propiedades criticas del protocolo bajo operaciones aleatorias. Todos los invariantes **PASARON** correctamente:
+
+#### `invariant_AccountingIsConsistent()` - Contabilidad Consistente
+Verifica que la suma de assets en estrategias + idle buffer == total reported.
+
+```
+✓ PASADO (runs: 32, calls: 480, reverts: 0)
+┌──────────┬──────────┬───────┬─────────┬──────────┐
+│ Contract │ Selector │ Calls │ Reverts │ Discards │
+├──────────┼──────────┼───────┼─────────┼──────────┤
+│ Handler  │ deposit  │ 161   │ 0       │ 0        │
+│ Handler  │ harvest  │ 157   │ 0       │ 0        │
+│ Handler  │ withdraw │ 162   │ 0       │ 0        │
+└──────────┴──────────┴───────┴─────────┴──────────┘
+```
+
+#### `invariant_SupplyIsCoherent()` - Supply Coherente
+Verifica que totalSupply de shares == suma de balances de usuarios.
+
+```
+✓ PASADO (runs: 32, calls: 480, reverts: 0)
+┌──────────┬──────────┬───────┬─────────┬──────────┐
+│ Contract │ Selector │ Calls │ Reverts │ Discards │
+├──────────┼──────────┼───────┼─────────┼──────────┤
+│ Handler  │ deposit  │ 155   │ 0       │ 0        │
+│ Handler  │ harvest  │ 141   │ 0       │ 0        │
+│ Handler  │ withdraw │ 184   │ 0       │ 0        │
+└──────────┴──────────┴───────┴─────────┴──────────┘
+```
+
+#### `invariant_VaultIsSolvent()` - Solvencia del Vault
+Verifica que el vault siempre puede cubrir todos los retiros (solvencia total).
+
+```
+✓ PASADO (runs: 32, calls: 480, reverts: 0)
+┌──────────┬──────────┬───────┬─────────┬──────────┐
+│ Contract │ Selector │ Calls │ Reverts │ Discards │
+├──────────┼──────────┼───────┼─────────┼──────────┤
+│ Handler  │ deposit  │ 144   │ 0       │ 0        │
+│ Handler  │ harvest  │ 177   │ 0       │ 0        │
+│ Handler  │ withdraw │ 159   │ 0       │ 0        │
+└──────────┴──────────┴───────┴─────────┴──────────┘
+```
+
+**Resultado**: `3 tests passed, 0 failed, 0 skipped` en 86.03s (246.29s CPU time)
 
 ### Coverage
 
 | Contrato | Lines | Statements | Branches | Functions |
 |----------|-------|------------|----------|-----------|
-| Vault.sol | 56.60% | 54.97% | 30.77% | 52.63% |
-| StrategyManager.sol | 75.14% | 69.00% | 55.26% | 100.00% |
+| Vault.sol | 95.32% | 92.98% | 76.67% | 100.00% |
+| StrategyManager.sol | 75.57% | 69.53% | 56.41% | 100.00% |
 | AaveStrategy.sol | 70.49% | 70.18% | 50.00% | 91.67% |
-| CompoundStrategy.sol | 78.57% | 83.33% | 60.00% | 91.67% |
-| **Total** | **60.67%** | **57.94%** | **44.94%** | **70.93%** |
+| CompoundStrategy.sol | 80.70% | 86.00% | 70.00% | 91.67% |
+| **Total** | **82.80%** | **79.06%** | **64.04%** | **97.59%** |
 
 ## Deployment
 

@@ -723,8 +723,32 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
             IStrategyManager(strategy_manager).withdrawTo(from_strategies, address(this));
         }
 
+        // Obtiene el balance del vault que ya tiene todo el idle buffer + lo extraido de las
+        // estrategias si era neesario
+        uint256 balance = IERC20(asset()).balanceOf(address(this));
+
+        // Calcula la cantidad a transferir al usuario, el mínimo entre el balance del vault y
+        // la cantidad a retirar por el usuario. Para asegurar que el vault no es insolvente
+        uint256 to_transfer = assets.min(balance);
+
+        /**
+         * Comprueba que la cantidad a transferir esté menos de 20 wei por debajo de lo esperado
+         *
+         * Los protocolos externos (Aave, Compound...) redondean a la baja perdiendo ~1-2 wei por
+         * operación. Actualmente tenemos 2 estrategias, pero en el plan es ir aumentándolas
+         * Toleramos hasta 20 wei (2 wei × ~10 estrategias futuras = margen conservador)
+         *
+         * Si la diferencia excede 20 wei, tenemos un problema de accounting serio: el vault
+         * no tiene suficientes assets para redimir las shares emitidas (insolvencia = prison bars)
+         *
+         * Costo para el usuario: $0.00000000000005 con ETH a $2,500 (una mierda)
+         */
+        if (to_transfer < assets) {
+            require(assets - to_transfer < 20, "Excessive rounding");
+        }
+
         // Transfiere los assets al receiver
-        IERC20(asset()).safeTransfer(receiver, assets);
+        IERC20(asset()).safeTransfer(receiver, to_transfer);
     }
 
     /**

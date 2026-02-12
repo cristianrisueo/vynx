@@ -170,8 +170,8 @@ contract StrategyManagerTest is Test {
         // Retira la mitad
         _withdrawToVault(50 ether);
 
-        // Comprueba que el vault recibió los fondos
-        assertEq(IERC20(WETH).balanceOf(address(vault)), 50 ether);
+        // Comprueba que el vault recibió los fondos (tolerancia 2 wei por redondeo proporcional)
+        assertApproxEqAbs(IERC20(WETH).balanceOf(address(vault)), 50 ether, 2);
 
         // Comprueba que el manager tiene aproximadamente la mitad
         assertApproxEqRel(manager.totalAssets(), 50 ether, 0.01e18);

@@ -215,6 +215,9 @@ contract StrategyManager is IStrategyManager, Ownable {
         uint256 total_assets = totalAssets();
         if (total_assets == 0) return;
 
+        // Acumulador de lo realmente retirado de cada estrategia (protocolos externos redondean a la baja -1w)
+        uint256 total_withdrawn = 0;
+
         // Itera sobre cada estrategia para retirar proporcialmente
         for (uint256 i = 0; i < strategies.length; i++) {
             // Obtiene la estrategia y su balance actual
@@ -227,14 +230,18 @@ contract StrategyManager is IStrategyManager, Ownable {
             // Calcula cuanto retirar de esta estrategia (proporcional a su balance)
             uint256 to_withdraw = (assets * strategy_balance) / total_assets;
 
-            // Si el resultado es mayor que 0 invoca el método withdraw de esa estrategia
+            // Si hay que retirar de esta estrategia usamos el acumulador para acumular lo realmente retirado
+            // lo normal es 1 wei aprox, pero podrían ser 2
             if (to_withdraw > 0) {
-                strategy.withdraw(to_withdraw);
+                uint256 actual = strategy.withdraw(to_withdraw);
+                total_withdrawn += actual;
             }
         }
 
-        // Con los assets ya en el manager los transfiere al receiver (vault)
-        IERC20(asset).safeTransfer(receiver, assets);
+        // Transfiere al vault lo realmente retirado (99% seguro será menor que lo solicitado)
+        if (total_withdrawn > 0) {
+            IERC20(asset).safeTransfer(receiver, total_withdrawn);
+        }
     }
 
     /**

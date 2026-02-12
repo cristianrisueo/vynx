@@ -157,10 +157,15 @@ contract CompoundStrategy is IStrategy {
      * @return actualWithdrawn Assets realmente retirados (incluye yield)
      */
     function withdraw(uint256 assets) external onlyManager returns (uint256 actualWithdrawn) {
-        // Realiza withdraw de Compound (recibe asset + yield). Transfiere a
-        // StrategyManager y emite evento. En caso de error revierte
+        // Balance de assets del contrato antes del withdraw = 0 (todo está en compound)
+        uint256 balance_before = IERC20(asset_address).balanceOf(address(this));
+
+        // Realiza withdraw de Compound, transfiere a StrategyManager y emite evento. En caso de error revierte
         try compound_comet.withdraw(asset_address, assets) {
-            actualWithdrawn = assets;
+            // Resta el balance actual de assets (lo realmente retirado de compound) - assets antes del retiro (0)
+            // para calcular lo que se ha obtenido realmente de compound (assets puede ser 100, pero perderse 1 wei)
+            actualWithdrawn = IERC20(asset_address).balanceOf(address(this)) - balance_before;
+
             IERC20(asset_address).safeTransfer(msg.sender, actualWithdrawn);
             emit Withdrawn(msg.sender, actualWithdrawn, assets);
         } catch {
