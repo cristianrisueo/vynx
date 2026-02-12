@@ -300,6 +300,34 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
         total = idle_buffer + IStrategyManager(strategy_manager).totalAssets();
     }
 
+    /**
+     * @notice Devuelve el maximo de assets que un usuario puede depositar
+     * @dev Override de ERC4626.maxDeposit para respetar el circuit breaker de maxTVL
+     * @return maxAssets Maximo de assets depositables antes de alcanzar maxTVL
+     */
+    function maxDeposit(address) public view override(ERC4626, IERC4626) returns (uint256 maxAssets) {
+        if (paused()) return 0;
+
+        uint256 current = totalAssets();
+        if (current >= max_tvl) return 0;
+
+        return max_tvl - current;
+    }
+
+    /**
+     * @notice Devuelve el maximo de shares que un usuario puede mintear
+     * @dev Override de ERC4626.maxMint para respetar el circuit breaker de maxTVL
+     * @return maxShares Maximo de shares minteables antes de alcanzar maxTVL
+     */
+    function maxMint(address) public view override(ERC4626, IERC4626) returns (uint256 maxShares) {
+        if (paused()) return 0;
+
+        uint256 current = totalAssets();
+        if (current >= max_tvl) return 0;
+
+        return convertToShares(max_tvl - current);
+    }
+
     //* Funciones principales: harvest y allocateIdle (publicas, sin restricciones)
 
     /**

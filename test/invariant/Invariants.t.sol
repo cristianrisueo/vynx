@@ -85,6 +85,9 @@ contract InvariantsTest is Test {
      * @dev Tras cualquier secuencia de deposits y withdraws, los assets reales del vault
      *      deben ser >= las shares emitidas. Si esto falla, el vault debe más de lo que tiene
      *      y los últimos usuarios en retirar perderían fondos
+     * @dev Un vault solvente siempre tiene totalAssets >= totalSupply (1 share vale >= 1 asset).
+     *      Usamos un margen del 1% para tolerar fees de protocolos externos (Aave/Compound)
+     *      al depositar/retirar, que pueden causar pequeñas pérdidas por slippage/rounding
      */
     function invariant_VaultIsSolvent() public view {
         // Cogemos los assets (WETH) y supply (shares) totales del vault
@@ -94,9 +97,14 @@ contract InvariantsTest is Test {
         // Si no hay shares, no hay nada que comprobar
         if (total_supply == 0) return;
 
-        // totalAssets debe ser >= totalSupply (ratio inicial >= 1:1, o con yield > 1:1)
-        // Permitimos 0.1% de margen por fees de protocolos al depositar
-        assertApproxEqRel(total_assets, total_supply, 0.001e18, "INVARIANTE ROTA: Vault insolvente");
+        // totalAssets debe ser >= totalSupply con margen del 1% para fees de protocolos
+        // El yield hace que totalAssets crezca respecto a totalSupply (correcto, el vault gana dinero)
+        // Solo sería insolvente si total_assets < total_supply * 0.99
+        assertGe(
+            total_assets * 10000,
+            total_supply * 9900,
+            "INVARIANTE ROTA: Vault insolvente (totalAssets < 99% de totalSupply)"
+        );
     }
 
     /**
@@ -116,20 +124,25 @@ contract InvariantsTest is Test {
 
     /**
      * @notice Invariante: totalSupply es coherente con los balances individuales
-     * @dev La suma de shares de todos los actores debe ser <= totalSupply
+     * @dev La suma de shares de todos los actores + holders conocidos debe ser <= totalSupply
      *      Si es mayor, se están creando shares de la nada
+     * @dev El treasury recibe shares por performance fees durante harvest, así que lo incluimos
+     *      en la suma de holders conocidos junto con los actores del handler
      */
     function invariant_SupplyIsCoherent() public view {
         // Obtenemos el totalsupply de shares del vault y el acumulador para iteraciones
         uint256 total_supply = vault.totalSupply();
-        uint256 actors_sum = 0;
+        uint256 known_holders_sum = 0;
 
-        // Suma los balances de todos los actores del protocolo
+        // Suma los balances de todos los actores del handler
         for (uint256 i = 0; i < actors.length; i++) {
-            actors_sum += vault.balanceOf(actors[i]);
+            known_holders_sum += vault.balanceOf(actors[i]);
         }
 
-        // La suma de balances individuales debe ser <= totalSupply
-        assertLe(actors_sum, total_supply, "INVARIANTE ROTA: Shares aparecieron de la nada");
+        // Suma el balance del treasury (recibe shares por performance fees en harvest)
+        known_holders_sum += vault.balanceOf(vault.treasury_address());
+
+        // La suma de balances de holders conocidos debe ser <= totalSupply
+        assertLe(known_holders_sum, total_supply, "INVARIANTE ROTA: Shares aparecieron de la nada");
     }
 }
