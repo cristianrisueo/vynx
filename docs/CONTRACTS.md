@@ -1,50 +1,71 @@
 # Documentación de Contratos
 
-Este documento proporciona documentación técnica detallada de cada contrato del protocolo Multi-Strategy Vault, incluyendo variables de estado, funciones principales, eventos y modificadores.
+Este documento proporciona documentación técnica detallada de cada contrato del protocolo VynX V1, incluyendo variables de estado, funciones principales, eventos y modificadores.
 
 ---
 
-## StrategyVault.sol
+## Vault.sol
 
-**Ubicación**: `src/core/StrategyVault.sol`
+**Ubicación**: `src/core/Vault.sol`
 
 ### Propósito
 
-Vault ERC4626 que actúa como interfaz principal para usuarios. Mintea shares tokenizadas (msvWETH) en proporción a los assets depositados, acumula WETH en un idle buffer para optimizar gas, y gestiona withdrawal fees del 2%.
+Vault ERC4626 que actúa como interfaz principal para usuarios. Mintea shares tokenizadas (vxWETH) en proporción a los assets depositados, acumula WETH en un idle buffer para optimizar gas, coordina harvest de rewards con distribución de performance fees, y gestiona el keeper incentive system.
 
 ### Herencia
 
 - `ERC4626` (OpenZeppelin): Implementación estándar de vault tokenizado
-- `ERC20` (OpenZeppelin): Token de shares (msvWETH)
+- `ERC20` (OpenZeppelin): Token de shares (vxWETH, nombre dinámico: "VynX {SYMBOL} Vault")
 - `Ownable` (OpenZeppelin): Control de acceso administrativo
-- `Pausable` (OpenZeppelin): Emergency stop para deposits/withdrawals
+- `Pausable` (OpenZeppelin): Emergency stop para deposits/withdrawals/harvest
 
 ### Llamado Por
 
 - **Usuarios (EOAs/contratos)**: `deposit()`, `mint()`, `withdraw()`, `redeem()`
+- **Keepers/Cualquiera**: `harvest()`, `allocateIdle()`
 - **Owner**: Funciones administrativas (pause, setters)
-- **Cualquiera**: `allocateIdle()` (si idle >= threshold)
 
 ### Llama A
 
-- **StrategyManager**: `allocate()` cuando idle buffer alcanza threshold, `withdrawTo()` cuando usuarios retiran
+- **StrategyManager**: `allocate()` cuando idle buffer alcanza threshold, `withdrawTo()` cuando usuarios retiran, `harvest()` cuando alguien cosecha
 - **IERC20(WETH)**: Transferencias de WETH (SafeERC20)
 
 ### Variables de Estado Clave
 
 ```solidity
-// Inmutables
-StrategyManager public immutable strategy_manager;  // Motor de allocation
+// Constantes
+uint256 public constant BASIS_POINTS = 10000;       // 100% = 10000 basis points
 
-// Configuración del protocolo
-address public fee_receiver;           // Recibe withdrawal fees (2%)
-uint256 public withdrawal_fee;         // 200 basis points = 2%
-uint256 public idle_threshold;         // 10 ether (threshold para auto-allocate)
-uint256 public max_tvl;                // 1000 ether (circuit breaker)
-uint256 public min_deposit;            // 0.01 ether (anti-spam, anti-rounding)
+// Dirección del strategy manager
+address public strategy_manager;                      // Motor de allocation y harvest
+
+// Keeper system
+mapping(address => bool) public isOfficialKeeper;    // Keepers oficiales (sin incentivo)
+
+// Direcciones de fee recipients
+address public treasury_address;                      // Recibe 80% perf fee en SHARES
+address public founder_address;                       // Recibe 20% perf fee en WETH
 
 // Estado del idle buffer
-uint256 public idle_weth;              // WETH acumulado pendiente de invertir
+uint256 public idle_buffer;                           // WETH acumulado pendiente de invertir
+
+// Contadores de harvest
+uint256 public last_harvest;                          // Timestamp del último harvest
+uint256 public total_harvested;                       // Profit bruto total acumulado
+
+// Parámetros de harvest
+uint256 public min_profit_for_harvest = 0.1 ether;   // Profit mínimo para ejecutar harvest
+uint256 public keeper_incentive = 100;                // 1% (100 bp) del profit para keepers ext.
+
+// Parámetros de fees
+uint256 public performance_fee = 2000;                // 20% (2000 bp) sobre profits
+uint256 public treasury_split = 8000;                 // 80% del perf fee → treasury (shares)
+uint256 public founder_split = 2000;                  // 20% del perf fee → founder (WETH)
+
+// Circuit breakers
+uint256 public min_deposit = 0.01 ether;              // Anti-spam, anti-rounding
+uint256 public idle_threshold = 10 ether;             // Threshold para auto-allocate
+uint256 public max_tvl = 1000 ether;                  // TVL máximo permitido
 ```
 
 ### Funciones Principales
@@ -58,9 +79,9 @@ Deposita WETH en el vault y mintea shares al usuario.
 2. Verifica `totalAssets() + assets <= max_tvl` (circuit breaker)
 3. Calcula shares usando `previewDeposit(assets)` (antes de cambiar estado)
 4. Transfiere WETH del usuario al vault (`SafeERC20.safeTransferFrom`)
-5. Incrementa `idle_weth += assets` (acumula en buffer)
+5. Incrementa `idle_buffer += assets` (acumula en buffer)
 6. Mintea shares al receiver (`_mint`)
-7. Si `idle_weth >= idle_threshold` (10 ETH), auto-ejecuta `_allocateIdle()`
+7. Si `idle_buffer >= idle_threshold` (10 ETH), auto-ejecuta `_allocateIdle()`
 
 **Modificadores**: `whenNotPaused`
 
@@ -88,38 +109,72 @@ Mintea cantidad exacta de shares depositando los assets necesarios.
 Retira cantidad exacta de WETH quemando shares necesarias.
 
 **Flujo:**
-1. Verifica `assets > 0`
-2. Calcula shares a quemar usando `previewWithdraw(assets)` (incluye fee)
-3. Verifica allowance si `msg.sender != owner` (`_spendAllowance`)
-4. Quema shares del owner (`_burn`) - **CEI pattern**
-5. Calcula fee: `fee = (assets * 200) / (10000 - 200)` = 2.04 WETH por 100 WETH netos
-6. Calcula gross: `gross = assets + fee` = 102.04 WETH
-7. Llama `_withdrawAssets(gross, receiver, fee)`:
-   - Retira primero de `idle_weth` si hay disponible
-   - Si no alcanza, llama `manager.withdrawTo(remaining, vault)`
-8. Transfiere `fee` al `fee_receiver`
-9. Transfiere `assets` netos al `receiver`
+1. Calcula shares a quemar usando `previewWithdraw(assets)`
+2. Verifica allowance si `msg.sender != owner` (`_spendAllowance`)
+3. Quema shares del owner (`_burn`) - **CEI pattern**
+4. Calcula `from_idle = min(idle_buffer, assets)`
+5. Calcula `from_strategies = assets - from_idle`
+6. Si `from_strategies > 0`, llama `manager.withdrawTo(from_strategies, vault)`
+7. Verifica rounding tolerance: `assets - to_transfer < 20 wei`
+8. Transfiere `assets` netos al `receiver`
 
 **Modificadores**: `whenNotPaused`
 
-**Eventos**: `FeeCollected(fee_receiver, fee)`, `Withdrawn(receiver, assets, shares)`
+**Eventos**: `Withdrawn(receiver, assets, shares)`
+
+**Nota sobre rounding**: Protocolos externos (Aave, Compound) redondean a la baja ~1-2 wei por operación. El vault tolera hasta 20 wei de diferencia (margen para ~10 estrategias futuras). Si la diferencia excede 20 wei, revierte con "Excessive rounding" (problema de accounting serio).
 
 ---
 
 #### redeem(uint256 shares, address receiver, address owner) → uint256 assets
 
-Quema shares exactas y retira WETH proporcional (menos fee).
+Quema shares exactas y retira WETH proporcional.
 
 **Flujo:**
-1. Verifica `shares > 0`
-2. Calcula assets netos usando `previewRedeem(shares)` (ya descuenta fee)
-3. Calcula valor bruto de shares: `gross_value = super.previewRedeem(shares)`
-4. Calcula fee: `fee = (gross_value * 200) / 10000`
-5. Similar a `withdraw()` a partir de aquí
+1. Calcula assets netos usando `previewRedeem(shares)`
+2. Similar a `withdraw()` a partir de aquí
 
 **Modificadores**: `whenNotPaused`
 
-**Eventos**: `FeeCollected(fee_receiver, fee)`, `Withdrawn(receiver, assets, shares)`
+**Eventos**: `Withdrawn(receiver, assets, shares)`
+
+---
+
+#### harvest() → uint256 profit
+
+Cosecha rewards de todas las estrategias y distribuye performance fees.
+
+**Precondiciones**: Vault no pausado. Cualquiera puede llamar.
+
+**Flujo:**
+1. Llama `IStrategyManager(strategy_manager).harvest()` → obtiene `profit`
+2. Si `profit < min_profit_for_harvest` (0.1 ETH) → return 0 (no distribuye)
+3. Si caller no es keeper oficial:
+   - Calcula `keeper_reward = (profit * keeper_incentive) / BASIS_POINTS`
+   - Paga desde `idle_buffer` si hay suficiente, sino retira de estrategias
+   - Transfiere `keeper_reward` WETH al caller
+4. Calcula `net_profit = profit - keeper_reward`
+5. Calcula `perf_fee = (net_profit * performance_fee) / BASIS_POINTS`
+6. Distribuye fees via `_distributePerformanceFee(perf_fee)`:
+   - Treasury: `treasury_amount = (perf_fee * treasury_split) / BP` → mintea shares
+   - Founder: `founder_amount = (perf_fee * founder_split) / BP` → transfiere WETH
+7. Actualiza `last_harvest = block.timestamp`, `total_harvested += profit`
+
+**Modificadores**: `whenNotPaused`
+
+**Eventos**: `Harvested(profit, perf_fee, timestamp)`, `PerformanceFeeDistributed(treasury_amount, founder_amount)`
+
+**Ejemplo numérico:**
+```solidity
+// profit = 5.5 WETH (de harvest de estrategias)
+// Caller es keeper externo (no oficial)
+//
+// keeper_reward = 5.5 * 100 / 10000 = 0.055 WETH → pagado al keeper
+// net_profit = 5.5 - 0.055 = 5.445 WETH
+// perf_fee = 5.445 * 2000 / 10000 = 1.089 WETH
+// treasury_amount = 1.089 * 8000 / 10000 = 0.8712 WETH → mintea shares al treasury
+// founder_amount = 1.089 * 2000 / 10000 = 0.2178 WETH → transfiere WETH al founder
+```
 
 ---
 
@@ -129,13 +184,34 @@ Calcula TVL total bajo gestión del vault.
 
 ```solidity
 function totalAssets() public view returns (uint256) {
-    return idle_weth + strategy_manager.totalAssets();
+    return idle_buffer + IStrategyManager(strategy_manager).totalAssets();
 }
 ```
 
 **Incluye:**
-- `idle_weth`: WETH físico en el vault (pendiente de invertir)
+- `idle_buffer`: WETH físico en el vault (pendiente de invertir)
 - `strategy_manager.totalAssets()`: Suma de WETH en todas las estrategias (incluye yield)
+
+---
+
+#### maxDeposit(address) → uint256
+
+Retorna máximo depositible antes de alcanzar max_tvl. Retorna 0 si pausado.
+
+```solidity
+function maxDeposit(address) public view returns (uint256) {
+    if (paused()) return 0;
+    uint256 current = totalAssets();
+    if (current >= max_tvl) return 0;
+    return max_tvl - current;
+}
+```
+
+---
+
+#### maxMint(address) → uint256
+
+Retorna máximo de shares minteables antes de alcanzar max_tvl. Retorna 0 si pausado.
 
 ---
 
@@ -146,30 +222,43 @@ function totalAssets() public view returns (uint256) {
 Transfiere idle buffer al StrategyManager para inversión.
 
 **Flujo:**
-1. Guarda `amount = idle_weth`
-2. Resetea `idle_weth = 0`
+1. Guarda `to_allocate = idle_buffer`
+2. Resetea `idle_buffer = 0`
 3. Transfiere WETH al manager (`safeTransfer`)
-4. Llama `manager.allocate(amount)`
+4. Llama `manager.allocate(to_allocate)`
 
 **Llamada desde:**
-- `deposit()` / `mint()` si `idle_weth >= idle_threshold`
-- `allocateIdle()` (externa, cualquiera puede llamar)
-- `forceAllocateIdle()` (owner only)
+- `deposit()` / `mint()` si `idle_buffer >= idle_threshold`
+- `allocateIdle()` (externa, cualquiera puede llamar si idle >= threshold)
 
 ---
 
-#### _withdrawAssets(uint256 gross_amount, address receiver, uint256 fee)
+#### _withdraw(address caller, address receiver, address owner, uint256 assets, uint256 shares)
 
-Helper para retirar assets del vault (idle + manager si necesario).
+Override de ERC4626._withdraw con lógica custom de retiro.
 
 **Flujo:**
-1. Calcula `from_idle = min(idle_weth, gross_amount)`
-2. Resta `idle_weth -= from_idle`
-3. Calcula `from_manager = gross_amount - from_idle`
-4. Si `from_manager > 0`, llama `manager.withdrawTo(from_manager, vault)`
-5. Calcula `assets_net = gross_amount - fee`
-6. Transfiere `fee` al `fee_receiver`
-7. Transfiere `assets_net` al `receiver`
+1. Reduce allowance si `caller != owner`
+2. Quema shares del owner (CEI pattern)
+3. Calcula `from_idle = min(idle_buffer, assets)`
+4. Resta `idle_buffer -= from_idle`
+5. Si `from_strategies > 0`, llama `manager.withdrawTo(from_strategies, vault)`
+6. Obtiene `balance = IERC20(asset).balanceOf(address(this))`
+7. Calcula `to_transfer = min(assets, balance)`
+8. Verifica rounding: `assets - to_transfer < 20` (revierte si excede)
+9. Transfiere al receiver
+
+---
+
+#### _distributePerformanceFee(uint256 perf_fee)
+
+Distribuye performance fees entre treasury y founder.
+
+**Flujo:**
+1. `treasury_amount = (perf_fee * treasury_split) / BASIS_POINTS`
+2. `founder_amount = (perf_fee * founder_split) / BASIS_POINTS`
+3. Treasury: convierte `treasury_amount` a shares → `_mint(treasury_address, treasury_shares)`
+4. Founder: retira de idle_buffer o estrategias → `safeTransfer(founder_address, founder_amount)`
 
 ---
 
@@ -180,43 +269,28 @@ Helper para retirar assets del vault (idle + manager si necesario).
 function pause() external onlyOwner
 function unpause() external onlyOwner
 
+// Configuración de fees
+function setPerformanceFee(uint256 new_fee) external onlyOwner      // Max: 10000 (100%)
+function setFeeSplit(uint256 new_treasury, uint256 new_founder) external onlyOwner
+    // Requiere: new_treasury + new_founder == BASIS_POINTS
+
 // Configuración del idle buffer
 function setIdleThreshold(uint256 new_threshold) external onlyOwner
-function allocateIdle() external  // Cualquiera si idle >= threshold
-function forceAllocateIdle() external onlyOwner  // Sin check de threshold
+function allocateIdle() external whenNotPaused  // Cualquiera si idle >= threshold
 
 // Circuit breakers
-function setMaxTVL(uint256 new_max_tvl) external onlyOwner
-function setMinDeposit(uint256 new_min_deposit) external onlyOwner
+function setMaxTVL(uint256 new_max) external onlyOwner
+function setMinDeposit(uint256 new_min) external onlyOwner
 
-// Fees
-function setWithdrawalFee(uint256 new_withdrawal_fee) external onlyOwner
-function setWithdrawalFeeReceiver(address new_fee_receiver) external onlyOwner
-```
+// Direcciones
+function setTreasury(address new_treasury) external onlyOwner       // No address(0)
+function setFounder(address new_founder) external onlyOwner         // No address(0)
+function setStrategyManager(address new_manager) external onlyOwner // No address(0)
 
-### Funciones de Consulta
-
-```solidity
-function investedAssets() external view returns (uint256)
-    // TVL en estrategias (sin idle)
-
-function idleAssets() external view returns (uint256)
-    // WETH en idle buffer
-
-function canAllocate() external view returns (bool)
-    // True si idle_weth >= idle_threshold
-
-function maxDeposit(address) public view override returns (uint256)
-    // Máximo que se puede depositar (respeta max_tvl, paused)
-
-function maxWithdraw(address owner) public view override returns (uint256)
-    // Máximo que owner puede retirar
-
-function previewRedeem(uint256 shares) public view override returns (uint256)
-    // Assets netos que recibe usuario (descuenta fee)
-
-function previewWithdraw(uint256 assets) public view override returns (uint256)
-    // Shares necesarias para retirar assets (incluye fee)
+// Keeper system
+function setOfficialKeeper(address keeper, bool status) external onlyOwner
+function setMinProfitForHarvest(uint256 new_min) external onlyOwner
+function setKeeperIncentive(uint256 new_incentive) external onlyOwner
 ```
 
 ### Eventos Importantes
@@ -224,22 +298,33 @@ function previewWithdraw(uint256 assets) public view override returns (uint256)
 ```solidity
 event Deposited(address indexed user, uint256 assets, uint256 shares);
 event Withdrawn(address indexed user, uint256 assets, uint256 shares);
+event Harvested(uint256 profit, uint256 performanceFee, uint256 timestamp);
+event PerformanceFeeDistributed(uint256 treasuryAmount, uint256 founderAmount);
 event IdleAllocated(uint256 amount);
-event FeeCollected(address indexed fee_receiver, uint256 fee_amount);
-event IdleThresholdUpdated(uint256 old_threshold, uint256 new_threshold);
-event MaxTVLUpdated(uint256 old_max, uint256 new_max);
-event MinDepositUpdated(uint256 old_min, uint256 new_min);
-event WithdrawalFeeUpdated(uint256 indexed old_fee, uint256 indexed new_fee);
-event FeeReceiverUpdated(address indexed old_receiver, address indexed new_receiver);
+event StrategyManagerUpdated(address indexed newManager);
+event PerformanceFeeUpdated(uint256 oldFee, uint256 newFee);
+event FeeSplitUpdated(uint256 treasurySplit, uint256 founderSplit);
+event MinDepositUpdated(uint256 oldMin, uint256 newMin);
+event IdleThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
+event MaxTVLUpdated(uint256 oldMax, uint256 newMax);
+event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
+event FounderUpdated(address indexed oldFounder, address indexed newFounder);
+event OfficialKeeperUpdated(address indexed keeper, bool status);
+event MinProfitForHarvestUpdated(uint256 oldMin, uint256 newMin);
+event KeeperIncentiveUpdated(uint256 oldIncentive, uint256 newIncentive);
 ```
 
 ### Errores Custom
 
 ```solidity
-error StrategyVault__ZeroAmount();
-error StrategyVault__BelowMinDeposit();
-error StrategyVault__MaxTVLExceeded();
-error StrategyVault__IdleBelowThreshold();
+error Vault__DepositBelowMinimum();
+error Vault__MaxTVLExceeded();
+error Vault__InsufficientIdleBuffer();
+error Vault__InvalidPerformanceFee();
+error Vault__InvalidFeeSplit();
+error Vault__InvalidTreasuryAddress();
+error Vault__InvalidFounderAddress();
+error Vault__InvalidStrategyManagerAddress();
 ```
 
 ---
@@ -250,7 +335,7 @@ error StrategyVault__IdleBelowThreshold();
 
 ### Propósito
 
-Cerebro del protocolo que calcula weighted allocation basado en APY, distribuye assets entre estrategias, ejecuta rebalanceos rentables y retira proporcionalmente durante withdrawals.
+Cerebro del protocolo que calcula weighted allocation basado en APY, distribuye assets entre estrategias, ejecuta rebalanceos rentables, retira proporcionalmente durante withdrawals, y coordina harvest fail-safe de todas las estrategias.
 
 ### Herencia
 
@@ -258,34 +343,39 @@ Cerebro del protocolo que calcula weighted allocation basado en APY, distribuye 
 
 ### Llamado Por
 
-- **StrategyVault**: `allocate()`, `withdrawTo()` (modificador `onlyVault`)
+- **Vault**: `allocate()`, `withdrawTo()`, `harvest()` (modificador `onlyVault`)
 - **Owner**: `addStrategy()`, `removeStrategy()`, setters
 - **Cualquiera**: `rebalance()` (si `shouldRebalance()` es true)
 
 ### Llama A
 
-- **IStrategy**: `deposit()`, `withdraw()`, `totalAssets()`, `apy()`
+- **IStrategy**: `deposit()`, `withdraw()`, `harvest()`, `totalAssets()`, `apy()`
 
 ### Variables de Estado Clave
 
 ```solidity
+// Constantes
+uint256 public constant BASIS_POINTS = 10000;               // 100% = 10000 bp
+uint256 public constant MAX_STRATEGIES = 10;                 // Previene gas DoS en loops
+
 // Inmutables
-address public immutable vault;        // StrategyVault autorizado
-address public immutable asset;        // WETH
+address public immutable asset;                              // WETH
+
+// Vault (set via initialize, una sola vez)
+address public vault;                                        // Vault autorizado
 
 // Estrategias disponibles
 IStrategy[] public strategies;
 mapping(address => bool) public is_strategy;
-mapping(IStrategy => uint256) public target_allocation;  // En basis points
+mapping(IStrategy => uint256) public targetAllocation;       // En basis points
 
 // Parámetros de allocation
-uint256 public max_allocation_per_strategy = 5000;  // 50%
-uint256 public min_allocation_threshold = 1000;     // 10%
+uint256 public max_allocation_per_strategy = 5000;           // 50%
+uint256 public min_allocation_threshold = 1000;              // 10%
 
 // Parámetros de rebalancing
-uint256 public rebalance_threshold = 200;           // 2% diferencia de APY
+uint256 public rebalance_threshold = 200;                    // 2% diferencia de APY
 uint256 public min_tvl_for_rebalance = 10 ether;
-uint256 public gas_cost_multiplier = 200;           // 2x margen
 ```
 
 ### Funciones Principales
@@ -301,9 +391,9 @@ Distribuye WETH entre estrategias según target allocation.
 2. Llama `_calculateTargetAllocation()`:
    - Obtiene APY de cada estrategia
    - Calcula targets usando `_computeTargets()` (weighted allocation)
-   - Escribe targets al storage: `target_allocation[strategy] = target`
+   - Escribe targets al storage: `targetAllocation[strategy] = target`
 3. Para cada estrategia con `target > 0`:
-   - Calcula `amount = (assets * target) / 10000`
+   - Calcula `amount = (assets * target) / BASIS_POINTS`
    - Transfiere `amount` WETH a la estrategia
    - Llama `strategy.deposit(amount)`
    - Emite `Allocated(strategy, amount)`
@@ -333,21 +423,40 @@ Retira WETH de estrategias proporcionalmente y transfiere al receiver.
    - Obtiene `strategy_balance = strategy.totalAssets()`
    - Si `strategy_balance == 0`, continúa
    - Calcula proporcional: `to_withdraw = (assets * strategy_balance) / total_assets`
-   - Llama `strategy.withdraw(to_withdraw)` (WETH va al manager)
-5. Transfiere `assets` WETH del manager al receiver
+   - Llama `strategy.withdraw(to_withdraw)` → captura `actualWithdrawn`
+   - Acumula `total_withdrawn += actualWithdrawn`
+5. Transfiere `total_withdrawn` WETH del manager al receiver
 
 **Modificadores**: `onlyVault`
 
-**Nota**: Retira proporcionalmente para mantener ratios. NO recalcula target allocation (ahorro de gas).
+**Nota**: Retira proporcionalmente para mantener ratios. NO recalcula target allocation (ahorro de gas). Usa `actualWithdrawn` para contabilizar rounding de protocolos externos.
 
 **Ejemplo:**
 ```solidity
 // Estado: Aave 70 WETH, Compound 30 WETH (total 100 WETH)
 // Usuario retira 50 WETH
-// - De Aave: 50 * 70/100 = 35 WETH
-// - De Compound: 50 * 30/100 = 15 WETH
+// - De Aave: 50 * 70/100 = 35 WETH (real: ~34.999999999999999998)
+// - De Compound: 50 * 30/100 = 15 WETH (real: ~14.999999999999999999)
 // Resultado: Aave 35 WETH, Compound 15 WETH (mantiene ratio 70/30)
 ```
+
+---
+
+#### harvest() → uint256 total_profit
+
+Cosecha rewards de todas las estrategias con fail-safe.
+
+**Flujo:**
+1. Para cada estrategia:
+   - `try strategy.harvest()` → acumula profit si éxito
+   - `catch` → emite `HarvestFailed(strategy, reason)` y continúa
+2. Retorna `total_profit` (suma de profits individuales)
+
+**Modificadores**: `onlyVault`
+
+**Eventos**: `Harvested(total_profit)`, `HarvestFailed(strategy, reason)` si alguna falla
+
+**Nota**: El fail-safe es crítico — si Aave harvest falla por falta de rewards, Compound harvest continúa normalmente.
 
 ---
 
@@ -363,16 +472,16 @@ Ajusta cada estrategia a su target allocation moviendo solo deltas necesarios.
 3. Obtiene `total_tvl = totalAssets()`
 4. Para cada estrategia:
    - Calcula `current_balance = strategy.totalAssets()`
-   - Calcula `target_balance = (total_tvl * target) / 10000`
+   - Calcula `target_balance = (total_tvl * target) / BASIS_POINTS`
    - Si `current > target`: Añade a array de exceso
    - Si `target > current`: Añade a array de necesidad
 5. Para cada estrategia con exceso:
    - Retira exceso: `strategy.withdraw(excess)`
-   - Para cada estrategia con necesidad:
-     - Calcula `to_transfer = min(available, needed)`
-     - Transfiere WETH a estrategia destino
-     - Deposita: `strategy.deposit(to_transfer)`
-     - Emite `Rebalanced(from_strategy, to_strategy, amount)`
+6. Para cada estrategia con necesidad:
+   - Calcula `to_transfer = min(available, needed)`
+   - Transfiere WETH a estrategia destino
+   - Deposita: `strategy.deposit(to_transfer)`
+   - Emite `Rebalanced(from_strategy, to_strategy, amount)`
 
 **Modificadores**: Ninguno (público)
 
@@ -380,48 +489,34 @@ Ajusta cada estrategia a su target allocation moviendo solo deltas necesarios.
 
 **Ejemplo:**
 ```solidity
-// Estado actual: Aave 70 WETH (5% APY), Compound 30 WETH (6% APY)
-// Targets: Aave 45% (45 WETH), Compound 55% (55 WETH)
+// Estado actual: Aave 70 WETH (3.5% APY), Compound 30 WETH (6% APY)
+// Targets: Aave ~37% (37 WETH), Compound ~63% (63 WETH)
 // Rebalance:
-//   1. Retira 25 WETH de Aave
-//   2. Deposita 25 WETH en Compound
-// Estado final: Aave 45 WETH, Compound 55 WETH
+//   1. Retira 33 WETH de Aave
+//   2. Deposita 33 WETH en Compound
+// Estado final: Aave 37 WETH, Compound 63 WETH
 ```
 
 ---
 
 #### shouldRebalance() → bool
 
-Calcula si un rebalance es rentable comparando profit esperado vs gas cost.
+Verifica si un rebalance es rentable comparando diferencia de APY entre estrategias.
 
 **Flujo:**
-1. Verifica `strategies.length >= 2` y `totalAssets() >= min_tvl`
-2. Calcula targets temporales usando `_computeTargets()` (no modifica storage)
-3. Verifica que al menos un target sea > 0
-4. Para cada estrategia:
-   - Calcula delta entre `current_balance` y `target_balance`
-   - Si `target > current`: Suma profit esperado `(delta * strategy.apy()) / 10000`
-   - Cuenta número de movimientos necesarios
-5. Calcula `weekly_profit = (annual_profit * 7) / 365`
-6. Estima `gas_cost = (num_moves * 300000) * tx.gasprice`
-7. Retorna `weekly_profit > (gas_cost * gas_multiplier / 100)`
+1. Verifica `strategies.length >= 2`
+2. Verifica `totalAssets() >= min_tvl_for_rebalance` (10 ETH)
+3. Calcula `max_apy` y `min_apy` entre todas las estrategias
+4. Retorna `(max_apy - min_apy) >= rebalance_threshold` (200 bp = 2%)
 
 **Nota**: Es función `view` (no modifica estado), puede ser llamada por bots/frontends.
 
 **Ejemplo de cálculo:**
 ```solidity
-// Estado: Aave 70 WETH (5%), Compound 30 WETH (6%)
-// Targets: Aave 45 WETH, Compound 55 WETH
-// Movimiento: 25 WETH Aave → Compound
-//
-// Profit anual: 25 * 6% = 1.5 WETH
-// Profit semanal: 1.5 * 7/365 = 0.0287 WETH
-//
-// Gas: 2 movimientos * 300k = 600k gas
-// Gas cost: 600k * 50 gwei = 0.03 ETH
-// Con multiplier 2x: 0.06 ETH
-//
-// Decisión: 0.0287 < 0.06 → NO rebalancear
+// Aave APY: 3.5% (350 bp), Compound APY: 6% (600 bp)
+// Diferencia: 600 - 350 = 250 bp
+// Threshold: 200 bp
+// 250 >= 200 → ✅ shouldRebalance = true
 ```
 
 ---
@@ -434,33 +529,34 @@ Agrega nueva estrategia al manager.
 
 **Flujo:**
 1. Verifica que estrategia no exista (`!is_strategy[strategy]`)
-2. Añade al array: `strategies.push(IStrategy(strategy))`
-3. Marca como existente: `is_strategy[strategy] = true`
-4. Recalcula target allocations: `_calculateTargetAllocation()`
+2. Verifica `strategies.length < MAX_STRATEGIES` (max 10)
+3. Verifica `strategy.asset() == asset` (mismo underlying)
+4. Añade al array: `strategies.push(IStrategy(strategy))`
+5. Marca como existente: `is_strategy[strategy] = true`
+6. Recalcula target allocations: `_calculateTargetAllocation()`
 
 **Modificadores**: `onlyOwner`
 
-**Eventos**: `StrategyAdded(strategy)`, `TargetAllocationsUpdated()`
+**Eventos**: `StrategyAdded(strategy)`, `TargetAllocationUpdated()`
 
 ---
 
-#### removeStrategy(address strategy)
+#### removeStrategy(uint256 index)
 
-Remueve estrategia del manager.
+Remueve estrategia del manager por índice.
 
 **Precondición**: Estrategia debe tener balance cero antes de remover.
 
 **Flujo:**
-1. Verifica que estrategia exista
-2. Encuentra índice en array
-3. Elimina target: `delete target_allocation[strategies[index]]`
-4. Swap & pop: `strategies[index] = strategies[length-1]; strategies.pop()`
-5. Marca como no existente: `is_strategy[strategy] = false`
-6. Recalcula targets para estrategias restantes
+1. Verifica que estrategia en `index` tenga `totalAssets() == 0`
+2. Elimina target: `delete targetAllocation[strategies[index]]`
+3. Swap & pop: `strategies[index] = strategies[length-1]; strategies.pop()`
+4. Marca como no existente: `is_strategy[strategy] = false`
+5. Recalcula targets para estrategias restantes
 
 **Modificadores**: `onlyOwner`
 
-**Eventos**: `StrategyRemoved(strategy)`, `TargetAllocationsUpdated()`
+**Eventos**: `StrategyRemoved(strategy)`, `TargetAllocationUpdated()`
 
 ---
 
@@ -473,19 +569,19 @@ Calcula targets de allocation basados en APY con caps.
 **Algoritmo:**
 1. Si no hay estrategias: retorna array vacío
 2. Suma APYs de todas las estrategias: `total_apy`
-3. Si `total_apy == 0`: distribuye equitativamente (`10000 / strategies.length`)
+3. Si `total_apy == 0`: distribuye equitativamente (`BASIS_POINTS / strategies.length`)
 4. Para cada estrategia:
-   - Calcula target sin caps: `uncapped = (apy * 10000) / total_apy`
+   - Calcula target sin caps: `uncapped = (apy * BASIS_POINTS) / total_apy`
    - Aplica límites:
      - Si `uncapped > max_allocation`: target = max (50%)
      - Si `uncapped < min_threshold`: target = 0 (10%)
      - Sino: target = uncapped
 5. Normaliza para que sumen 10000:
    - Suma todos los targets
-   - Si no suma 10000: `target[i] = (target[i] * 10000) / total_targets`
+   - Si no suma 10000: `target[i] = (target[i] * BASIS_POINTS) / total_targets`
 6. Retorna array de targets
 
-**Usado por**: `_calculateTargetAllocation()` (escribe a storage), `shouldRebalance()` (solo lectura)
+**Usado por**: `_calculateTargetAllocation()` (escribe a storage), `shouldRebalance()` no lo usa directamente (compara APYs)
 
 ---
 
@@ -496,10 +592,21 @@ Calcula targets y escribe a storage.
 **Flujo:**
 1. Si no hay estrategias: retorna
 2. Llama `_computeTargets()` para obtener array de targets
-3. Escribe a storage: `target_allocation[strategies[i]] = computed[i]`
-4. Emite `TargetAllocationsUpdated()`
+3. Escribe a storage: `targetAllocation[strategies[i]] = computed[i]`
+4. Emite `TargetAllocationUpdated()`
 
 ---
+
+### Inicialización
+
+```solidity
+// Constructor: solo recibe asset
+constructor(address _asset)
+
+// initialize: resuelve dependencia circular vault ↔ manager
+function initialize(address _vault) external onlyOwner
+    // Solo se puede llamar una vez (revierte si vault != address(0))
+```
 
 ### Funciones de Consulta
 
@@ -517,6 +624,7 @@ function getAllStrategiesInfo() external view returns (
     uint256[] memory targets
 )
     // Información completa de todas las estrategias
+    // ⚠️ Gas intensive (~1M gas), solo para off-chain queries
 ```
 
 ### Setters Administrativos
@@ -524,7 +632,6 @@ function getAllStrategiesInfo() external view returns (
 ```solidity
 function setRebalanceThreshold(uint256 new_threshold) external onlyOwner
 function setMinTVLForRebalance(uint256 new_min_tvl) external onlyOwner
-function setGasCostMultiplier(uint256 new_multiplier) external onlyOwner
 function setMaxAllocationPerStrategy(uint256 new_max) external onlyOwner
     // Recalcula targets después
 function setMinAllocationThreshold(uint256 new_min) external onlyOwner
@@ -535,10 +642,13 @@ function setMinAllocationThreshold(uint256 new_min) external onlyOwner
 
 ```solidity
 event Allocated(address indexed strategy, uint256 assets);
-event Rebalanced(address indexed from_strategy, address indexed to_strategy, uint256 assets);
+event Rebalanced(address indexed fromStrategy, address indexed toStrategy, uint256 assets);
+event Harvested(uint256 totalProfit);
 event StrategyAdded(address indexed strategy);
 event StrategyRemoved(address indexed strategy);
-event TargetAllocationsUpdated();
+event TargetAllocationUpdated();
+event HarvestFailed(address indexed strategy, string reason);
+event Initialized(address indexed vault);
 ```
 
 ### Modificadores
@@ -556,9 +666,13 @@ modifier onlyVault() {
 error StrategyManager__NoStrategiesAvailable();
 error StrategyManager__StrategyAlreadyExists();
 error StrategyManager__StrategyNotFound();
+error StrategyManager__StrategyHasAssets();
 error StrategyManager__RebalanceNotProfitable();
 error StrategyManager__ZeroAmount();
 error StrategyManager__OnlyVault();
+error StrategyManager__VaultAlreadyInitialized();
+error StrategyManager__AssetMismatch();
+error StrategyManager__InvalidVaultAddress();
 ```
 
 ---
@@ -569,7 +683,7 @@ error StrategyManager__OnlyVault();
 
 ### Propósito
 
-Integración con Aave v3 para depositar WETH y generar yield mediante lending.
+Integración con Aave v3 para depositar WETH y generar yield mediante lending. Incluye harvest de rewards AAVE con swap automático a WETH via Uniswap V3 y reinversión automática (auto-compound).
 
 ### Implementa
 
@@ -577,20 +691,31 @@ Integración con Aave v3 para depositar WETH y generar yield mediante lending.
 
 ### Llamado Por
 
-- **StrategyManager**: `deposit()`, `withdraw()`, `totalAssets()`, `apy()`
+- **StrategyManager**: `deposit()`, `withdraw()`, `harvest()`, `totalAssets()`, `apy()`
 
 ### Llama A
 
 - **IPool (Aave v3)**: `supply()`, `withdraw()`, `getReserveData()`
+- **IRewardsController (Aave)**: `claimAllRewards()` — claimea AAVE tokens acumulados
+- **ISwapRouter (Uniswap V3)**: `exactInputSingle()` — swap AAVE → WETH
 - **IERC20(WETH)**: Transferencias con SafeERC20
 
 ### Variables de Estado
 
 ```solidity
-address public immutable manager;          // StrategyManager autorizado
-IPool private immutable aave_pool;         // Aave v3 Pool
-IAToken private immutable a_weth;          // aWETH (rebasing token)
-address private immutable weth_address;    // WETH
+// Constantes
+uint256 public constant BASIS_POINTS = 10000;
+uint256 public constant MAX_SLIPPAGE_BPS = 100;       // 1% max slippage en swaps
+
+// Inmutables
+address public immutable manager;                       // StrategyManager autorizado
+IPool private immutable aave_pool;                     // Aave v3 Pool
+IRewardsController private immutable rewards_controller;// Aave rewards controller
+address private immutable asset_address;               // WETH
+IAToken private immutable a_token;                     // aWETH (rebasing token)
+address private immutable reward_token;                // AAVE governance token
+ISwapRouter private immutable uniswap_router;          // Uniswap V3 Router
+uint24 private immutable pool_fee;                     // 3000 (0.3%)
 ```
 
 ### Funciones Principales
@@ -608,8 +733,6 @@ Deposita WETH en Aave v3.
 
 **Modificadores**: `onlyManager`
 
-**Eventos**: `Deposited(manager, assets, shares)`
-
 **Nota**: aWETH hace rebase automático, el balance incrementa con yield.
 
 ---
@@ -626,7 +749,35 @@ Retira WETH de Aave v3.
 
 **Modificadores**: `onlyManager`
 
-**Eventos**: `Withdrawn(manager, actualWithdrawn, assets)`
+---
+
+#### harvest() → uint256 profit
+
+Cosecha rewards AAVE, swap a WETH via Uniswap V3, re-invierte en Aave.
+
+**Flujo:**
+1. Construye array con dirección del aToken
+2. Llama `rewards_controller.claimAllRewards([aToken])` → recibe AAVE tokens
+3. Si no hay rewards → return 0
+4. Calcula `min_amount_out = (claimed * (BASIS_POINTS - MAX_SLIPPAGE_BPS)) / BASIS_POINTS`
+   - Con MAX_SLIPPAGE_BPS = 100: `min_out = claimed * 9900 / 10000` (1% slippage max)
+5. Ejecuta swap via Uniswap V3:
+   ```solidity
+   uniswap_router.exactInputSingle(
+       tokenIn: reward_token,     // AAVE
+       tokenOut: asset_address,   // WETH
+       fee: pool_fee,             // 3000 (0.3%)
+       recipient: address(this),
+       amountIn: claimed,
+       amountOutMinimum: min_amount_out,
+       sqrtPriceLimitX96: 0
+   )
+   ```
+6. Re-supply: `aave_pool.supply(weth, amount_out, address(this), 0)` (auto-compound)
+7. Return `profit = amount_out`
+8. Emite `Harvested(msg.sender, profit)`
+
+**Modificadores**: `onlyManager`
 
 ---
 
@@ -636,7 +787,7 @@ Balance actual de WETH en Aave (incluye yield).
 
 ```solidity
 function totalAssets() external view returns (uint256) {
-    return a_weth.balanceOf(address(this));
+    return a_token.balanceOf(address(this));
 }
 ```
 
@@ -669,6 +820,9 @@ function availableLiquidity() external view returns (uint256)
 
 function aTokenBalance() external view returns (uint256)
     // Balance de aWETH de la estrategia
+
+function pendingRewards() external view returns (uint256)
+    // Rewards AAVE pendientes de claimear
 ```
 
 ### Modificadores
@@ -686,6 +840,8 @@ modifier onlyManager() {
 error AaveStrategy__DepositFailed();
 error AaveStrategy__WithdrawFailed();
 error AaveStrategy__OnlyManager();
+error AaveStrategy__HarvestFailed();
+error AaveStrategy__SwapFailed();
 ```
 
 ---
@@ -696,7 +852,7 @@ error AaveStrategy__OnlyManager();
 
 ### Propósito
 
-Integración con Compound v3 para depositar WETH y generar yield mediante lending.
+Integración con Compound v3 para depositar WETH y generar yield mediante lending. Incluye harvest de rewards COMP con swap automático a WETH via Uniswap V3 y reinversión automática (auto-compound).
 
 ### Implementa
 
@@ -704,19 +860,30 @@ Integración con Compound v3 para depositar WETH y generar yield mediante lendin
 
 ### Llamado Por
 
-- **StrategyManager**: `deposit()`, `withdraw()`, `totalAssets()`, `apy()`
+- **StrategyManager**: `deposit()`, `withdraw()`, `harvest()`, `totalAssets()`, `apy()`
 
 ### Llama A
 
-- **IComet (Compound v3)**: `supply()`, `withdraw()`, `balanceOf()`, `getSupplyRate()`, `getUtilization()`
+- **ICometMarket (Compound v3)**: `supply()`, `withdraw()`, `balanceOf()`, `getSupplyRate()`, `getUtilization()`
+- **ICometRewards (Compound v3)**: `claim()` — claimea COMP tokens acumulados
+- **ISwapRouter (Uniswap V3)**: `exactInputSingle()` — swap COMP → WETH
 - **IERC20(WETH)**: Transferencias con SafeERC20
 
 ### Variables de Estado
 
 ```solidity
-address public immutable manager;               // StrategyManager autorizado
-IComet private immutable compound_comet;        // Compound v3 Comet
-address private immutable weth_address;         // WETH
+// Constantes
+uint256 public constant BASIS_POINTS = 10000;
+uint256 public constant MAX_SLIPPAGE_BPS = 100;       // 1% max slippage en swaps
+
+// Inmutables
+address public immutable manager;                       // StrategyManager autorizado
+ICometMarket private immutable compound_comet;         // Compound v3 Comet
+ICometRewards private immutable compound_rewards;      // Compound rewards controller
+address private immutable asset_address;               // WETH
+address private immutable reward_token;                // COMP token
+ISwapRouter private immutable uniswap_router;          // Uniswap V3 Router
+uint24 private immutable pool_fee;                     // 3000 (0.3%)
 ```
 
 ### Funciones Principales
@@ -735,8 +902,6 @@ Deposita WETH en Compound v3.
 
 **Modificadores**: `onlyManager`
 
-**Eventos**: `Deposited(manager, assets, shares)`
-
 **Nota**: Compound v3 usa accounting interno (no tokens), balance incrementa con yield.
 
 ---
@@ -746,14 +911,45 @@ Deposita WETH en Compound v3.
 Retira WETH de Compound v3.
 
 **Flujo:**
-1. Llama `compound_comet.withdraw(weth, assets)`
-2. Balance interno de Compound decrementa, recibe WETH
-3. Transfiere WETH al manager: `safeTransfer(msg.sender, actualWithdrawn)`
-4. Emite `Withdrawn(msg.sender, actualWithdrawn, assets)`
+1. Captura `balance_before = IERC20(asset).balanceOf(address(this))`
+2. Llama `compound_comet.withdraw(weth, assets)`
+3. Captura `balance_after = IERC20(asset).balanceOf(address(this))`
+4. Calcula `actualWithdrawn = balance_after - balance_before` (captura rounding)
+5. Transfiere WETH al manager: `safeTransfer(msg.sender, actualWithdrawn)`
+6. Emite `Withdrawn(msg.sender, actualWithdrawn, assets)`
 
 **Modificadores**: `onlyManager`
 
-**Eventos**: `Withdrawn(manager, actualWithdrawn, assets)`
+**Nota**: Usa pattern `balance_before/balance_after` para capturar el monto realmente retirado. Compound puede redondear ~1-2 wei a la baja.
+
+---
+
+#### harvest() → uint256 profit
+
+Cosecha rewards COMP, swap a WETH via Uniswap V3, re-invierte en Compound.
+
+**Flujo:**
+1. Llama `compound_rewards.claim(comet, address(this), true)` → recibe COMP tokens
+2. Obtiene `reward_amount = IERC20(reward_token).balanceOf(address(this))`
+3. Si no hay rewards → return 0
+4. Calcula `min_amount_out = (reward_amount * 9900) / 10000` (1% slippage max)
+5. Ejecuta swap via Uniswap V3:
+   ```solidity
+   uniswap_router.exactInputSingle(
+       tokenIn: reward_token,     // COMP
+       tokenOut: asset_address,   // WETH
+       fee: pool_fee,             // 3000 (0.3%)
+       recipient: address(this),
+       amountIn: reward_amount,
+       amountOutMinimum: min_amount_out,
+       sqrtPriceLimitX96: 0
+   )
+   ```
+6. Re-supply: `compound_comet.supply(weth, amount_out)` (auto-compound)
+7. Return `profit = amount_out`
+8. Emite `Harvested(msg.sender, profit)`
+
+**Modificadores**: `onlyManager`
 
 ---
 
@@ -781,7 +977,7 @@ APY actual de Compound para WETH.
 3. Convierte a APY anual en basis points:
    ```solidity
    // rate está en base 1e18 por segundo
-   // APY = rate * seconds_per_year / 1e18 * 10000
+   // APY = rate * seconds_per_year * 10000 / 1e18
    // Simplificado: (rate * 315360000000) / 1e18
    apyBasisPoints = (uint256(rate) * 315360000000) / 1e18;
    ```
@@ -789,7 +985,7 @@ APY actual de Compound para WETH.
 **Ejemplo:**
 ```solidity
 // supply_rate = 1000000000000000 (1e15 per second)
-// APY = (1e15 * 31536000 * 10000) / 1e18 = 315 basis points = 3.15%
+// APY = (1e15 * 315360000000) / 1e18 = 315 basis points = 3.15%
 ```
 
 ---
@@ -802,6 +998,9 @@ function getSupplyRate() external view returns (uint256)
 
 function getUtilization() external view returns (uint256)
     // Utilization actual del pool (borrowed / supplied)
+
+function pendingRewards() external view returns (uint256)
+    // Rewards COMP pendientes de claimear
 ```
 
 ### Modificadores
@@ -819,13 +1018,15 @@ modifier onlyManager() {
 error CompoundStrategy__DepositFailed();
 error CompoundStrategy__WithdrawFailed();
 error CompoundStrategy__OnlyManager();
+error CompoundStrategy__HarvestFailed();
+error CompoundStrategy__SwapFailed();
 ```
 
 ---
 
 ## IStrategy.sol
 
-**Ubicación**: `src/interfaces/IStrategy.sol`
+**Ubicación**: `src/interfaces/core/IStrategy.sol`
 
 ### Propósito
 
@@ -836,6 +1037,7 @@ Interfaz estándar que todas las estrategias deben implementar para permitir que
 ```solidity
 function deposit(uint256 assets) external returns (uint256 shares);
 function withdraw(uint256 assets) external returns (uint256 actualWithdrawn);
+function harvest() external returns (uint256 profit);
 function totalAssets() external view returns (uint256 total);
 function apy() external view returns (uint256 apyBasisPoints);
 function name() external view returns (string memory strategyName);
@@ -847,31 +1049,32 @@ function asset() external view returns (address assetAddress);
 ```solidity
 event Deposited(address indexed caller, uint256 assets, uint256 shares);
 event Withdrawn(address indexed caller, uint256 assets, uint256 shares);
+event Harvested(address indexed caller, uint256 profit);
 ```
 
 ### Nota Importante
 
-La interfaz NO incluye `mint()` / `redeem()` porque esas funciones son del ERC4626 vault, no de las estrategias individuales. Las estrategias solo necesitan `deposit()` / `withdraw()`.
+La interfaz incluye `harvest()` como función requerida — todas las estrategias de VynX V1 deben soportar cosecha de rewards. El `actualWithdrawn` en `withdraw()` permite contabilizar el rounding de protocolos externos.
 
 ---
 
-## IComet.sol
+## ICometMarket.sol & ICometRewards.sol
 
-**Ubicación**: `src/interfaces/IComet.sol`
+**Ubicación**: `src/interfaces/compound/ICometMarket.sol` y `src/interfaces/compound/ICometRewards.sol`
 
 ### Propósito
 
-Interfaz simplificada de Compound v3 Comet con solo las funciones necesarias para CompoundStrategy.
+Interfaces simplificadas de Compound v3 con solo las funciones necesarias para CompoundStrategy.
 
 ### Decisión de Diseño
 
-**¿Por qué interfaz custom en lugar de librerías oficiales?**
+**¿Por qué interfaces custom en lugar de librerías oficiales?**
 - Compound v3: Librerías oficiales tienen dependencias complejas e indexadas
-- Solo necesitamos 5 funciones
+- Solo necesitamos las funciones que usamos
 - Aave: Usamos librerías oficiales porque están limpias y bien estructuradas
 - Compound: Interfaz custom es más pragmática (trade-off: inconsistencia vs simplicidad)
 
-### Funciones
+### ICometMarket — Funciones
 
 ```solidity
 function supply(address asset, uint256 amount) external;
@@ -879,6 +1082,13 @@ function withdraw(address asset, uint256 amount) external;
 function balanceOf(address account) external view returns (uint256 balance);
 function getSupplyRate(uint256 utilization) external view returns (uint64 rate);
 function getUtilization() external view returns (uint256 utilization);
+```
+
+### ICometRewards — Funciones
+
+```solidity
+function claim(address comet, address src, bool shouldAccrue) external;
+function getRewardOwed(address comet, address account) external returns (RewardOwed memory);
 ```
 
 ---

@@ -1,16 +1,16 @@
 # Consideraciones de Seguridad
 
-Este documento analiza la postura de seguridad del Multi-Strategy Vault, incluyendo trust assumptions, vectores de ataque considerados, protecciones implementadas, puntos de centralización y limitaciones conocidas.
+Este documento analiza la postura de seguridad de VynX V1, incluyendo trust assumptions, vectores de ataque considerados, protecciones implementadas, puntos de centralización y limitaciones conocidas.
 
 ---
 
 ## 1. Trust Assumptions (En Qué Confiamos)
 
-El protocolo Multi-Strategy Vault **confía explícitamente** en los siguientes componentes externos:
+El protocolo VynX V1 **confía explícitamente** en los siguientes componentes externos:
 
 ### Aave v3
 
-**Nivel de confianza**: Alto ✅
+**Nivel de confianza**: Alto
 
 **Razones:**
 - Auditado múltiples veces por Trail of Bits, OpenZeppelin, Consensys Diligence, etc.
@@ -24,7 +24,7 @@ El protocolo Multi-Strategy Vault **confía explícitamente** en los siguientes 
 
 ### Compound v3
 
-**Nivel de confianza**: Alto ✅
+**Nivel de confianza**: Alto
 
 **Razones:**
 - Auditado por OpenZeppelin, ChainSecurity, etc.
@@ -36,9 +36,23 @@ El protocolo Multi-Strategy Vault **confía explícitamente** en los siguientes 
 - Si Compound sufre un exploit, podríamos perder fondos depositados en CompoundStrategy
 - Mitigación: Weighted allocation limita exposición al 50% máximo
 
+### Uniswap V3
+
+**Nivel de confianza**: Alto
+
+**Razones:**
+- DEX más establecido de Ethereum
+- Auditado extensivamente
+- Usado por miles de protocolos para swaps programáticos
+
+**Riesgos aceptados:**
+- Si Uniswap tiene un bug, los swaps de rewards durante harvest podrían fallar o devolver menos WETH
+- Si no hay liquidez suficiente en pools AAVE/WETH o COMP/WETH, harvest falla
+- Mitigación: Slippage max del 1%, fail-safe en StrategyManager (si harvest falla, continúa con otras estrategias)
+
 ### OpenZeppelin Contracts
 
-**Nivel de confianza**: Muy Alto ✅✅
+**Nivel de confianza**: Muy Alto
 
 **Razones:**
 - Estándar de industria (ERC4626, ERC20, Ownable, Pausable)
@@ -50,10 +64,11 @@ El protocolo Multi-Strategy Vault **confía explícitamente** en los siguientes 
 - `SafeERC20`: Transferencias seguras de tokens
 - `Ownable`: Control de acceso admin
 - `Pausable`: Emergency stop
+- `Math`: Operaciones matemáticas seguras
 
 ### WETH (Wrapped Ether)
 
-**Nivel de confianza**: Muy Alto ✅✅
+**Nivel de confianza**: Muy Alto
 
 **Razones:**
 - Contrato canónico de Ethereum
@@ -75,10 +90,10 @@ El protocolo ha sido diseñado considerando los siguientes vectores de ataque co
 1. **CEI Pattern (Checks-Effects-Interactions)**
 ```solidity
 // CORRECTO: Quema shares ANTES de transferir assets
-function withdraw(uint256 assets, address receiver, address owner) public {
-    shares = previewWithdraw(assets);
+function _withdraw(address caller, address receiver, address owner, uint256 assets, uint256 shares) internal {
     _burn(owner, shares);                    // Effect (modifica estado)
-    _withdrawAssets(gross_amount, receiver); // Interaction (external call)
+    // ... retiro de idle/strategies          // Interaction (external calls)
+    IERC20(asset).safeTransfer(receiver, amount); // Interaction
 }
 ```
 
@@ -92,9 +107,9 @@ IERC20(asset).safeTransferFrom(user, vault, amt); // Maneja reverts correctament
 
 3. **No hay callbacks a usuarios**
 - El vault nunca llama funciones de usuarios (no hay hooks)
-- Solo interactúa con contratos conocidos (strategies, WETH)
+- Solo interactúa con contratos conocidos (strategies, WETH, Uniswap)
 
-**Evaluación**: ✅ Protegido
+**Evaluación**: Protegido
 
 ---
 
@@ -121,15 +136,15 @@ IERC20(asset).safeTransferFrom(user, vault, amt); // Maneja reverts correctament
    - No hay beneficio especial para el ejecutor
    - MEV es mínimo (no hay arbitraje directo)
 
-2. **Withdrawal fee del 2%**
-   - Penaliza retiros inmediatos
-   - Atacante pagaría 2% fee, haciendo ataque no-rentable
-
-3. **Yield acumula con tiempo**
+2. **Yield acumula con tiempo**
    - Beneficio del rebalance se materializa durante semanas
    - Atacante no puede "flash-rebalance-withdraw"
 
-**Evaluación**: ✅ Mitigado (económicamente no-rentable)
+3. **Sin beneficio inmediato**
+   - El rebalance solo mueve fondos entre estrategias
+   - No genera profit instantáneo que se pueda extraer
+
+**Evaluación**: Mitigado (económicamente no-rentable)
 
 ---
 
@@ -159,10 +174,10 @@ IERC20(asset).safeTransferFrom(user, vault, amt); // Maneja reverts correctament
 
 1. **Depósito mínimo de 0.01 ETH**
 ```solidity
-uint256 public min_deposit = 0.01 ether; // 0.01 ETH
+uint256 public min_deposit = 0.01 ether;
 
 function deposit(uint256 assets, address receiver) public {
-    if (assets < min_deposit) revert StrategyVault__BelowMinDeposit();
+    if (assets < min_deposit) revert Vault__DepositBelowMinimum();
     // ...
 }
 ```
@@ -176,7 +191,7 @@ function deposit(uint256 assets, address receiver) public {
 2. **ERC4626 estándar de OpenZeppelin**
 - Implementación auditada con protecciones conocidas
 
-**Evaluación**: ✅ Protegido (coste de ataque prohibitivo)
+**Evaluación**: Protegido (coste de ataque prohibitivo)
 
 ---
 
@@ -195,75 +210,155 @@ function deposit(uint256 assets, address receiver) public {
    - Shares solo determinan proporción de assets
    - No hay governance atacable con flash loans
 
-3. **Withdrawal fee previene arbitraje**
-   - Flash loan → deposit → withdraw costaría 2% fee
-   - No hay forma de extraer valor en una transacción
+3. **Sin arbitraje instantáneo**
+   - No hay withdrawal fee pero tampoco hay forma de extraer valor en una transacción
+   - Flash loan → deposit → withdraw retorna lo mismo (menos rounding wei)
 
 **Escenarios considerados:**
 ```solidity
-// ❌ NO POSIBLE: Manipular APY
+// NO POSIBLE: Manipular APY
 // APY viene de Aave/Compound directamente
 // Flash loan no puede cambiar liquidity rate de Aave
 
-// ❌ NO POSIBLE: Arbitrar precio share/asset
-// Withdrawal fee del 2% hace arbitraje no-rentable
+// NO POSIBLE: Arbitrar precio share/asset
+// deposit y withdraw son simétricos (ERC4626 standard)
 
-// ❌ NO POSIBLE: Votación con shares prestadas
+// NO POSIBLE: Votación con shares prestadas
 // No existe sistema de governance
 ```
 
-**Evaluación**: ✅ No aplicable (sin vectores de ataque viables)
+**Evaluación**: No aplicable (sin vectores de ataque viables)
 
 ---
 
-### 2.5 Withdrawal Fee Bypass
+### 2.5 Keeper Incentive Risks
 
-**Descripción**: Atacante intenta evitar pagar el 2% fee durante retiros.
+**Descripción**: Riesgos asociados al sistema de keeper incentive y harvest público.
 
 **Vectores considerados:**
 
-1. **¿Puede transferir shares y que el receptor retire?**
+1. **Spam de harvest() cuando no hay rewards**
 ```solidity
-// Atacante: transfer(victim, shares)
-// Victim: withdraw() → paga fee igual
+// Escenario: Atacante llama harvest() repetidamente
+// Resultado: profit < min_profit_for_harvest → return 0
+// No se paga incentivo, no se distribuyen fees
+// Solo gas wasted por el atacante
 
-// NO FUNCIONA: El fee se calcula en withdraw/redeem
-// No importa quién transfirió las shares
+// Protección: min_profit_for_harvest = 0.1 ETH
+// Si profit < 0.1 ETH, harvest no ejecuta distribución
 ```
 
-2. **¿Puede explotar diferencia entre withdraw() y redeem()?**
+2. **Front-running de harvest**
 ```solidity
-// withdraw(100 WETH):
-//   fee = (100 * 200) / 9800 = 2.04 WETH
-//   quema shares equivalentes a 102.04 WETH
+// Escenario: Keeper A ve que hay rewards acumulados
+// Atacante B front-runs harvest() con gas más alto
+// Resultado: Atacante B recibe 1% keeper incentive
+// Keeper A gasta gas sin recibir nada
 
-// redeem(X shares):
-//   gross_value = super.previewRedeem(shares)
-//   fee = (gross_value * 200) / 10000
-//   assets_net = gross_value - fee
-
-// NO FUNCIONA: Ambas funciones aplican fee correctamente
+// Mitigación: Este es el diseño esperado — MEV normal
+// El 1% incentive es suficientemente bajo para no ser muy rentable de front-runear
+// Keepers oficiales no compiten por incentive
 ```
 
-3. **¿Puede explotar previewWithdraw vs previewRedeem?**
+3. **Keeper oficial malicioso**
 ```solidity
-function previewWithdraw(uint256 assets) public view {
-    uint256 assets_with_fee = (assets * 10000) / (10000 - 200);
-    return super.previewWithdraw(assets_with_fee);
+// Escenario: Owner marca una address como oficial
+// Keeper oficial harvesta sin pagar incentive
+// Resultado: Más profit para el protocolo, no para keeper
+
+// No es un riesgo — es una feature
+// Keepers oficiales son del protocolo y no necesitan incentivo
+```
+
+**Evaluación**: Mitigado (spam no-rentable, MEV esperado y tolerable)
+
+---
+
+### 2.6 Uniswap Swap Risks
+
+**Descripción**: Riesgos asociados al swap de reward tokens a WETH via Uniswap V3.
+
+**Vectores considerados:**
+
+1. **Sandwich attack en swaps**
+```solidity
+// Escenario:
+// 1. Bot detecta harvest() con swap grande en mempool
+// 2. Front-runs: compra WETH con el reward token
+// 3. harvest() ejecuta swap (peor precio por impacto)
+// 4. Back-runs: vende WETH
+
+// Mitigación: MAX_SLIPPAGE_BPS = 100 (1% max)
+// Si el sandwich causa > 1% slippage, la tx revierte
+// Con pool_fee de 0.3%, el margen para sandwich es muy limitado
+uint256 min_amount_out = (claimed * 9900) / 10000;
+```
+
+2. **Pool con baja liquidez**
+```solidity
+// Escenario: Pool AAVE/WETH o COMP/WETH tiene poca liquidez
+// harvest swap obtiene mal precio o revierte
+
+// Mitigación:
+// - Pools AAVE/WETH y COMP/WETH son altamente líquidos en mainnet
+// - Si swap revierte, fail-safe de StrategyManager continúa con otras estrategias
+// - El profit no se pierde, solo se pospone al siguiente harvest
+```
+
+3. **Reward token depegs o pierde valor**
+```solidity
+// Escenario: AAVE o COMP pierde valor significativo
+// Swap devuelve menos WETH del esperado
+
+// Mitigación:
+// - Slippage del 1% protege contra pérdidas extremas
+// - Si el swap falla, fail-safe continúa
+// - Los rewards perdidos son una fracción del yield total (la mayoría viene del lending)
+```
+
+**Evaluación**: Mitigado (slippage protection + fail-safe)
+
+---
+
+### 2.7 Withdrawal Rounding
+
+**Descripción**: Protocolos externos (Aave, Compound) redondean withdrawals a la baja, causando micro-diferencias entre assets solicitados y recibidos.
+
+**Análisis técnico:**
+```solidity
+// Aave v3: aave_pool.withdraw() puede devolver assets - 1 wei
+// Compound v3: compound_comet.withdraw() puede devolver assets - 1 o -2 wei
+
+// Pattern en CompoundStrategy:
+uint256 balance_before = IERC20(asset).balanceOf(address(this));
+compound_comet.withdraw(asset, assets);
+uint256 balance_after = IERC20(asset).balanceOf(address(this));
+uint256 actualWithdrawn = balance_after - balance_before;
+// actualWithdrawn puede ser assets - 1 o assets - 2
+```
+
+**Tolerancia en Vault:**
+```solidity
+// Vault acepta hasta 20 wei de diferencia
+if (to_transfer < assets) {
+    require(assets - to_transfer < 20, "Excessive rounding");
 }
 
-function previewRedeem(uint256 shares) public view {
-    uint256 assets = super.previewRedeem(shares);
-    uint256 fee = (assets * 200) / 10000;
-    return assets - fee;
-}
-
-// NO FUNCIONA: Matemática es consistente
-// previewWithdraw incluye fee en shares a quemar
-// previewRedeem descuenta fee de assets recibidos
+// ¿Por qué 20 wei?
+// - 2 estrategias actuales × ~2 wei/operación = ~4 wei
+// - Plan futuro: ~10 estrategias × ~2 wei = ~20 wei (margen conservador)
+// - Costo para usuario: ~$0.00000000000005 con ETH a $2,500
 ```
 
-**Evaluación**: ✅ Protegido (fee es inevitable)
+**¿Puede un atacante explotar esto?**
+```solidity
+// NO: 20 wei es insignificante (~$0.00000000000005)
+// NO: El rounding siempre beneficia al protocolo (redondeo a la baja)
+// NO: No hay acumulación de rounding errors entre operaciones
+// El rounding se resuelve por operación, no se propaga
+```
+
+**Evaluación**: Tolerado deliberadamente (costo trivial, estándar en DeFi)
 
 ---
 
@@ -274,29 +369,29 @@ function previewRedeem(uint256 shares) public view {
 **Modificadores usados:**
 
 ```solidity
-// StrategyVault
+// Vault
 modifier onlyOwner()        // Funciones admin (pause, setters)
-modifier whenNotPaused()    // Deposits y withdraws
+modifier whenNotPaused()    // Deposits, withdraws, harvest
 
 // StrategyManager
 modifier onlyOwner()        // Agregar/remover strategies, setters
-modifier onlyVault()        // allocate(), withdrawTo()
+modifier onlyVault()        // allocate(), withdrawTo(), harvest()
 
 // Strategies
-modifier onlyManager()      // deposit(), withdraw()
+modifier onlyManager()      // deposit(), withdraw(), harvest()
 ```
 
 **Jerarquía de permisos:**
 ```
 Owner del Vault
   ↓
-StrategyVault (contrato)
+Vault (contrato)
   ↓ (solo vault puede llamar)
 StrategyManager (contrato)
   ↓ (solo manager puede llamar)
 Strategies (contratos)
   ↓
-Protocolos externos (Aave/Compound)
+Protocolos externos (Aave/Compound/Uniswap)
 ```
 
 ---
@@ -309,7 +404,7 @@ uint256 public max_tvl = 1000 ether;
 
 function deposit(uint256 assets, address receiver) public {
     if (totalAssets() + assets > max_tvl) {
-        revert StrategyVault__MaxTVLExceeded();
+        revert Vault__MaxTVLExceeded();
     }
     // ...
 }
@@ -328,7 +423,7 @@ uint256 public min_deposit = 0.01 ether;
 
 function deposit(uint256 assets, address receiver) public {
     if (assets < min_deposit) {
-        revert StrategyVault__BelowMinDeposit();
+        revert Vault__DepositBelowMinimum();
     }
     // ...
 }
@@ -350,48 +445,58 @@ uint256 public min_allocation_threshold = 1000;     // 10%
 - **Max cap (50%)**: Limita exposición a una sola estrategia/protocolo
 - **Min threshold (10%)**: Evita asignar cantidades insignificantes (gas waste)
 
-**Ejemplo:**
-```solidity
-// Si Aave tiene 90% del total_apy:
-// Sin cap: Aave recibiría 90% del TVL
-// Con cap: Aave recibe máximo 50%
+---
 
-// Si una estrategia tiene 5% del total_apy:
-// Sin threshold: Recibiría 5% del TVL
-// Con threshold: Recibe 0% (no vale la pena el gas)
+**4. Max Strategies (Manager)**
+```solidity
+uint256 public constant MAX_STRATEGIES = 10;  // Hard-coded
 ```
+
+**Propósito:**
+- Previene gas DoS en loops de allocate/withdrawTo/harvest/rebalance
+- Con 10 estrategias, cada loop tiene coste predecible
+
+---
+
+**5. Min Profit for Harvest (Vault)**
+```solidity
+uint256 public min_profit_for_harvest = 0.1 ether;
+```
+
+**Propósito:**
+- Previene harvest no-rentables (gas > profit)
+- Previene spam de harvest() por atacantes
 
 ---
 
 ### 3.3 Emergency Stop (Pausable)
 
 ```solidity
-contract StrategyVault is ERC4626, Ownable, Pausable {
+contract Vault is IVault, ERC4626, Ownable, Pausable {
     function deposit(...) public whenNotPaused { }
     function mint(...) public whenNotPaused { }
     function withdraw(...) public whenNotPaused { }
     function redeem(...) public whenNotPaused { }
+    function harvest() external whenNotPaused { }
+    function allocateIdle() external whenNotPaused { }
 
-    function pause() external onlyOwner {
-        _pause();
-    }
-
-    function unpause() external onlyOwner {
-        _unpause();
-    }
+    function pause() external onlyOwner { _pause(); }
+    function unpause() external onlyOwner { _unpause(); }
 }
 ```
 
 **Cuándo usar:**
 - Se detecta vulnerabilidad en vault o estrategias
-- Hack en Aave/Compound afecta fondos
-- Bug crítico en weighted allocation
+- Hack en Aave/Compound/Uniswap afecta fondos
+- Bug crítico en weighted allocation o harvest
 - Mientras se investiga comportamiento anómalo
 
 **Qué pausa:**
-- ✅ Nuevos deposits
-- ✅ Nuevos withdraws
-- ❌ No pausa rebalances (manager está separado)
+- Nuevos deposits
+- Nuevos withdraws
+- Harvest
+- AllocateIdle
+- No pausa rebalances (manager está separado)
 
 **Nota:** Owner del manager debería remover estrategias comprometidas durante pausa.
 
@@ -419,31 +524,47 @@ IERC20(asset).safeTransferFrom(user, vault, amount);// ✅
 
 ---
 
-### 3.5 Rebalancing Solo Si Es Rentable
+### 3.5 Harvest Fail-Safe
 
 ```solidity
-function rebalance() external {
-    bool should = shouldRebalance();
-    if (!should) revert StrategyManager__RebalanceNotProfitable();
-    // ...
-}
-
-function shouldRebalance() public view returns (bool) {
-    // Calcula profit semanal esperado
-    uint256 weekly_profit = ...;
-
-    // Estima gas cost
-    uint256 gas_cost = (num_moves * 300000) * tx.gasprice;
-
-    // Solo permite rebalance si profit > gas × 2
-    return weekly_profit > (gas_cost * gas_cost_multiplier / 100);
+// StrategyManager.harvest() usa try-catch
+for (uint256 i = 0; i < strategies.length; i++) {
+    try strategies[i].harvest() returns (uint256 profit) {
+        total_profit += profit;
+    } catch Error(string memory reason) {
+        emit HarvestFailed(address(strategies[i]), reason);
+        // Continúa con la siguiente estrategia
+    }
 }
 ```
 
 **Propósito:**
-- Previene rebalances que destruyen valor
-- Margen de 2x protege contra volatilidad de gas price
-- Permite ajustar multiplicador si es necesario
+- Si AaveStrategy.harvest() falla (no hay rewards, Uniswap revierte, etc.), CompoundStrategy.harvest() continúa
+- Previene que un fallo bloquee todo el harvest
+- Emite evento para monitoring
+
+---
+
+### 3.6 Slippage Protection en Swaps
+
+```solidity
+// En AaveStrategy y CompoundStrategy
+uint256 public constant MAX_SLIPPAGE_BPS = 100;  // 1%
+
+uint256 min_amount_out = (claimed * (BASIS_POINTS - MAX_SLIPPAGE_BPS)) / BASIS_POINTS;
+// = claimed * 9900 / 10000 (mínimo 99% del valor esperado)
+
+uniswap_router.exactInputSingle(
+    // ...
+    amountOutMinimum: min_amount_out,  // Revierte si output < 99%
+    // ...
+);
+```
+
+**Propósito:**
+- Previene sandwich attacks (máximo 1% de impacto)
+- Protege contra pools con baja liquidez
+- Si el swap no puede conseguir 99%+, revierte (y fail-safe continúa)
 
 ---
 
@@ -455,26 +576,36 @@ El protocolo tiene puntos de centralización controlados por owners. En producci
 
 **Puede:**
 
-1. **Pausar deposits/withdrawals**
+1. **Pausar deposits/withdrawals/harvest**
 ```solidity
 vault.pause();
-// Todos los deposits y withdraws se bloquean
+// Todos los deposits, withdraws y harvest se bloquean
 ```
 
 2. **Cambiar parámetros del protocolo**
 ```solidity
-vault.setIdleThreshold(20 ether);        // Ajusta cuando invertir
-vault.setMaxTVL(10000 ether);            // Aumenta circuit breaker
-vault.setMinDeposit(0.1 ether);          // Sube depósito mínimo
-vault.setWithdrawalFee(500);             // Aumenta fee a 5%
-vault.setWithdrawalFeeReceiver(new_rx);  // Cambia quien recibe fees
+vault.setPerformanceFee(5000);             // Aumenta fee a 50%
+vault.setFeeSplit(5000, 5000);             // Cambia split 50/50
+vault.setMinDeposit(1 ether);             // Sube depósito mínimo
+vault.setIdleThreshold(100 ether);        // Cambia cuando invertir
+vault.setMaxTVL(10000 ether);             // Aumenta circuit breaker
+vault.setKeeperIncentive(500);            // Sube incentivo a 5%
+vault.setMinProfitForHarvest(1 ether);    // Sube threshold harvest
+```
+
+3. **Cambiar direcciones críticas**
+```solidity
+vault.setTreasury(new_treasury);           // Cambia quién recibe fees
+vault.setFounder(new_founder);             // Cambia founder address
+vault.setStrategyManager(new_manager);     // Cambia strategy manager
+vault.setOfficialKeeper(keeper, true);     // Marca keepers oficiales
 ```
 
 **NO puede:**
-- ❌ Robar fondos directamente
-- ❌ Transferir WETH del vault sin pasar por withdraw
-- ❌ Mintear shares sin depositar assets
-- ❌ Modificar balances de usuarios
+- Robar fondos directamente
+- Transferir WETH del vault sin pasar por withdraw
+- Mintear shares sin depositar assets
+- Modificar balances de usuarios
 
 **Mitigaciones recomendadas:**
 - Usar multisig (Gnosis Safe) como owner
@@ -489,33 +620,33 @@ vault.setWithdrawalFeeReceiver(new_rx);  // Cambia quien recibe fees
 
 1. **Agregar estrategias maliciosas**
 ```solidity
-// ⚠️ RIESGO: Owner puede agregar estrategia fake
+// RIESGO: Owner puede agregar estrategia fake
 manager.addStrategy(address(malicious_strategy));
 
 // malicious_strategy.deposit() podría:
 // - No depositar en protocolo real
 // - Transferir WETH a address del atacante
 // - Reportar totalAssets() falso
+// - harvest() podría robar fondos
 ```
 
-2. **Remover estrategias (con fondos)**
+2. **Remover estrategias**
 ```solidity
-// Owner debe retirar fondos primero
-// Pero podría olvidar/ignorar y remover igual
-manager.removeStrategy(address(aave_strategy));
+// Solo si balance = 0 (protección contra pérdida accidental)
+manager.removeStrategy(index);
 ```
 
 3. **Cambiar parámetros de allocation**
 ```solidity
 manager.setMaxAllocationPerStrategy(10000); // Permite 100% en una estrategia
 manager.setMinAllocationThreshold(0);       // Permite micro-allocations
-manager.setGasCostMultiplier(0);            // Permite rebalances no-rentables
+manager.setRebalanceThreshold(0);           // Permite rebalances sin diferencia APY
 ```
 
 **NO puede:**
-- ❌ Llamar allocate() o withdrawTo() (solo vault puede)
-- ❌ Robar WETH directamente del manager
-- ❌ Depositar/retirar de estrategias directamente
+- Llamar allocate(), withdrawTo() o harvest() (solo vault puede)
+- Robar WETH directamente del manager
+- Depositar/retirar de estrategias directamente
 
 **Mitigaciones recomendadas:**
 - Multisig como owner
@@ -584,7 +715,7 @@ El protocolo tiene limitaciones deliberadas (v1) y trade-offs conocidos:
 
 **Fórmula actual:**
 ```solidity
-target[i] = (strategy_apy[i] * 10000) / total_apy
+target[i] = (strategy_apy[i] * BASIS_POINTS) / total_apy
 // Con caps: max 50%, min 10%
 ```
 
@@ -626,30 +757,55 @@ Ejemplo:
 
 **Razones:**
 - Rebalancing en cada depósito sería carísimo
-- Gas cost varía demasiado (imposible predecir on-chain)
-- Keepers pueden elegir momento óptimo
+- Keepers pueden elegir momento óptimo (gas bajo)
+- shouldRebalance() es view (keepers pueden simular off-chain)
 
 **Mitigaciones:**
-- `shouldRebalance()` es view (keepers pueden simular off-chain)
 - Cualquiera puede ejecutar (permissionless)
-- Profit check previene ejecuciones no-rentables
+- Threshold del 2% previene ejecuciones innecesarias
 
 ---
 
-### 5.5 Sin High Water Mark
+### 5.5 Treasury Shares Ilíquidas
 
 **Limitación:**
-- No hay tracking de entry price por usuario
-- Withdrawal fee es flat 2%, no performance fee
+- Treasury recibe performance fees en shares (vxWETH)
+- Shares no se pueden vender fácilmente sin diluir a holders
 
 **Consecuencias:**
-- Usuario que entra en loss general paga fee igual
-- No hay incentivo para managers (protocolo no cobra performance fee)
+- Treasury acumula shares que auto-compound (buen yield a largo plazo)
+- Pero no puede convertir fácilmente a liquid assets sin impactar precio de shares
 
 **Trade-off:**
-- Flat fee es mucho más simple (gas-efficient)
-- Performance fee requiere accounting complejo por usuario
-- v1 prioriza simplicidad
+- Auto-compound > liquidez inmediata para treasury
+- Founder recibe liquid (WETH) para costes operativos
+- Si treasury necesita liquidez, puede redeem shares gradualmente
+
+---
+
+### 5.6 Harvest Depende de Liquidez Uniswap
+
+**Limitación:**
+- Si pools AAVE/WETH o COMP/WETH en Uniswap V3 no tienen liquidez, harvest falla
+- Rewards se acumulan sin convertir a WETH
+
+**Mitigaciones:**
+- Pools AAVE/WETH y COMP/WETH son altamente líquidos en mainnet
+- Fail-safe en StrategyManager permite que estrategias individuales fallen
+- Rewards no se pierden, solo se acumulan para el siguiente harvest exitoso
+- Slippage del 1% protege contra pools temporalmente ilíquidos
+
+---
+
+### 5.7 Max 10 Estrategias
+
+**Limitación:**
+- Máximo 10 estrategias activas simultáneamente (hard-coded)
+
+**Razones:**
+- Previene gas DoS en loops (allocate, withdrawTo, harvest, rebalance)
+- Con 10 estrategias, gas cost es predecible y razonable
+- Más de 10 estrategias probablemente no añaden diversificación significativa
 
 ---
 
@@ -661,11 +817,11 @@ Si este protocolo fuera a mainnet, auditoría debería enfocarse en:
 
 **Áreas de enfoque:**
 
-1. **Cálculo de withdrawal fee**
+1. **Cálculo de performance fee y distribución**
 ```solidity
-// ¿Es correcto que fee = (assets * 200) / (10000 - 200)?
-// ¿Podría causar overflow/underflow?
-// ¿Qué pasa si withdrawal_fee = 10000 (100%)?
+// ¿Overflow posible en (profit * keeper_incentive) / BASIS_POINTS?
+// ¿Qué pasa si performance_fee = 10000 (100%)?
+// ¿Qué pasa si treasury_split + founder_split != BASIS_POINTS?
 ```
 
 2. **Weighted allocation en _computeTargets()**
@@ -679,6 +835,7 @@ Si este protocolo fuera a mainnet, auditoría debería enfocarse en:
 ```solidity
 // ¿previewWithdraw y previewRedeem son consistentes?
 // ¿Puede haber rounding que beneficie al atacante?
+// ¿Mintear shares al treasury durante harvest afecta exchange rate?
 ```
 
 ---
@@ -699,11 +856,16 @@ Si este protocolo fuera a mainnet, auditoría debería enfocarse en:
    - ¿Distribución equitativa funciona?
 
 4. **Strategy.withdraw() revierte (falta liquidez)**
-   - ¿Usuario puede retirar desde otras strategies?
-   - ¿O todo el withdraw falla?
+   - ¿El usuario puede retirar o todo el withdraw falla?
 
-5. **Rebalance con gas price extremadamente alto**
-   - ¿Cálculo de profitability protege correctamente?
+5. **Harvest cuando idle_buffer = 0 y keeper necesita pago**
+   - ¿Retira correctamente de estrategias para pagar keeper?
+
+6. **Harvest retorna profit < min_profit_for_harvest**
+   - ¿Se acumulan los rewards sin distribuir fees?
+
+7. **Strategy.harvest() revierte**
+   - ¿Fail-safe continúa con otras estrategias?
 
 ---
 
@@ -713,13 +875,19 @@ Si este protocolo fuera a mainnet, auditoría debería enfocarse en:
 
 1. **Aave v3 devuelve valores esperados**
    - ¿Qué pasa si `getReserveData()` revierte?
-   - ¿Liquidity rate puede ser negativo? (No en Aave, pero verificar)
+   - ¿`claimAllRewards()` puede devolver 0 sin revertir?
 
 2. **Compound v3 devuelve uint64 en getSupplyRate()**
    - ¿Conversión a uint256 es segura?
    - ¿Overflow al multiplicar por 315360000000?
+   - ¿`claim()` puede devolver 0 sin revertir?
 
-3. **aTokens (Aave) hacen rebase correctamente**
+3. **Uniswap V3 swap edge cases**
+   - ¿Qué pasa si pool no existe?
+   - ¿Qué pasa si deadline expira?
+   - ¿Slippage protection funciona con cantidades muy pequeñas?
+
+4. **aTokens (Aave) hacen rebase correctamente**
    - ¿`balanceOf()` incluye yield acumulado siempre?
 
 ---
@@ -729,10 +897,13 @@ Si este protocolo fuera a mainnet, auditoría debería enfocarse en:
 **Puntos de atención:**
 
 1. **¿Todas las external calls siguen CEI?**
-   - Especialmente en `_withdrawAssets()`
+   - Especialmente en `_withdraw()`, `harvest()`, `_distributePerformanceFee()`
 
 2. **¿SafeERC20 protege contra reentrancy via ERC777?**
    - WETH no es ERC777, pero buena práctica
+
+3. **¿harvest() puede ser llamado recursivamente?**
+   - A través de strategy.harvest() → callback → vault.harvest()
 
 ---
 
@@ -741,9 +912,10 @@ Si este protocolo fuera a mainnet, auditoría debería enfocarse en:
 **Verificar:**
 
 1. **¿Todos los setters son onlyOwner?**
-2. **¿allocate/withdrawTo son realmente onlyVault?**
-3. **¿deposit/withdraw de strategies son onlyManager?**
+2. **¿allocate/withdrawTo/harvest son realmente onlyVault?**
+3. **¿deposit/withdraw/harvest de strategies son onlyManager?**
 4. **¿rebalance puede ser llamado por cualquiera? (debe ser público)**
+5. **¿initialize() solo se puede llamar una vez?**
 
 ---
 
@@ -751,52 +923,61 @@ Si este protocolo fuera a mainnet, auditoría debería enfocarse en:
 
 ### Fortalezas del Protocolo
 
-✅ **Arquitectura modular y clara**
+**Arquitectura modular y clara**
 - Separación de concerns (Vault, Manager, Strategies)
 - Fácil de auditar y razonar
 
-✅ **Uso de estándares de industria**
+**Uso de estándares de industria**
 - ERC4626 (OpenZeppelin)
 - SafeERC20 para todas las transferencias
 - Pausable para emergency stop
 
-✅ **Protecciones económicas**
-- Withdrawal fee previene ataques de arbitraje
+**Protecciones económicas**
 - Min deposit previene rounding attacks
-- Rebalancing solo si es rentable
+- Min profit previene harvest spam
+- Slippage protection en swaps (1%)
 
-✅ **Circuit breakers múltiples**
-- Max TVL, min deposit, allocation caps
+**Circuit breakers múltiples**
+- Max TVL, min deposit, allocation caps, max strategies
 - Pausa de emergencia
 
-✅ **Sin permiso para operaciones críticas**
+**Harvest fail-safe**
+- Try-catch individual por estrategia
+- Si una falla, las demás continúan
+
+**Sin permiso para operaciones críticas**
 - Rebalance es público (cualquiera puede ejecutar si es rentable)
-- allocateIdle es público (si idle >= threshold)
+- Harvest es público (incentivizado para keepers externos)
+- AllocateIdle es público (si idle >= threshold)
 
 ### Debilidades Conocidas
 
-⚠️ **Centralización del ownership**
+**Centralización del ownership**
 - Single point of failure si owner pierde key
 - Mitigación: Usar multisig en producción
 
-⚠️ **Trust en estrategias agregadas**
+**Trust en estrategias agregadas**
 - Owner puede agregar estrategia maliciosa
 - Mitigación: Whitelist + auditorías
 
-⚠️ **Dependencia de protocolos externos**
-- Si Aave/Compound tienen exploit, fondos en riesgo
-- Mitigación: Allocation caps (max 50%)
+**Dependencia de protocolos externos**
+- Si Aave/Compound/Uniswap tienen exploit, fondos en riesgo
+- Mitigación: Allocation caps (max 50%), fail-safe harvest
 
-⚠️ **Sin tracking de performance por usuario**
-- Flat withdrawal fee puede ser injusto
-- Mitigación: Diseño deliberado (simplicidad > fairness perfecta)
+**Treasury shares ilíquidas**
+- Treasury acumula shares que no puede vender fácilmente
+- Mitigación: Diseño deliberado (auto-compound > liquidez)
+
+**Harvest depende de Uniswap**
+- Si pools de reward tokens no tienen liquidez, harvest falla
+- Mitigación: Fail-safe, rewards se acumulan para siguiente intento
 
 ### Recomendaciones Finales
 
 **Para lanzar a mainnet:**
 
 1. **Auditoría profesional** (Trail of Bits, OpenZeppelin, Consensys)
-2. **Testnet prolongado** (Sepolia → Goerli → Mainnet)
+2. **Testnet prolongado** (Sepolia → Mainnet)
 3. **Bug bounty** (Immunefi, Code4rena)
 4. **Multisig como owner** (mínimo 3/5)
 5. **Monitoring on-chain** (Forta, Tenderly)
@@ -804,10 +985,10 @@ Si este protocolo fuera a mainnet, auditoría debería enfocarse en:
 7. **TVL gradual** (empezar con max_tvl = 100 ETH, subir gradualmente)
 
 **Para uso educacional:**
-- ✅ Código es production-grade y seguro
-- ✅ Arquitectura es sólida y extensible
-- ✅ Buenas prácticas implementadas (CEI, SafeERC20, etc.)
-- ⚠️ NO usar en mainnet sin auditoría formal
+- Código es production-grade y seguro
+- Arquitectura es sólida y extensible
+- Buenas prácticas implementadas (CEI, SafeERC20, fail-safe, slippage protection)
+- NO usar en mainnet sin auditoría formal
 
 ---
 

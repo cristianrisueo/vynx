@@ -191,6 +191,13 @@ forge script script/Deploy.s.sol --rpc-url $MAINNET_RPC_URL --broadcast --verify
 
 El deployer queda como owner y fee_receiver. Coste estimado: ~0.012 ETH.
 
+## Documentacion
+
+- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - Diseno del sistema, diagramas y flujos de datos
+- **[CONTRACTS.md](docs/CONTRACTS.md)** - Especificaciones de contratos, funciones y parametros
+- **[FLOWS.md](docs/FLOWS.md)** - Flujos operativos detallados (deposit, withdraw, harvest, rebalance)
+- **[SECURITY.md](docs/SECURITY.md)** - Consideraciones de seguridad, supuestos de confianza y limitaciones
+
 ## Parametros del Protocolo
 
 | Parametro | Valor Inicial | Descripcion |
