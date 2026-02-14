@@ -11,19 +11,19 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 /**
  * @title FullFlowTest
  * @author cristianrisueo
- * @notice Tests de integración end-to-end para el protocolo completo
- * @dev Fork de Mainnet real - valida flujos que cruzan vault → manager → strategies → protocolos
+ * @notice End-to-end integration tests for the complete protocol
+ * @dev Real Mainnet fork - validates flows that cross vault -> manager -> strategies -> protocols
  */
 contract FullFlowTest is Test {
-    //* Variables de estado
+    //* State variables
 
-    /// @notice Instancias del protocolo: Vault, manager y estrategias
+    /// @notice Protocol instances: Vault, manager and strategies
     Vault public vault;
     StrategyManager public manager;
     AaveStrategy public aave_strategy;
     CompoundStrategy public compound_strategy;
 
-    /// @notice Direcciones de los contratos en Mainnet
+    /// @notice Contract addresses on Mainnet
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address constant COMPOUND_COMET = 0xA17581A9E3356d9A858b789D68B4d866e593aE94;
@@ -34,56 +34,56 @@ contract FullFlowTest is Test {
     address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
     uint24 constant POOL_FEE = 3000;
 
-    /// @notice Usuarios de prueba
+    /// @notice Test users
     address public alice = makeAddr("alice");
     address public bob = makeAddr("bob");
     address public founder;
 
-    //* Setup del entorno de testing
+    //* Testing environment setup
 
     /**
-     * @notice Configura el entorno de testing
-     * @dev Fork de Mainnet con todo el protocolo desplegado y conectado
+     * @notice Configures the testing environment
+     * @dev Mainnet fork with the entire protocol deployed and connected
      */
     function setUp() public {
-        // Crea un fork de Mainnet usando el endpoint de Alchemy
+        // Create a Mainnet fork using the Alchemy endpoint
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Setea el founder
+        // Set the founder
         founder = makeAddr("founder");
 
-        // Despliega y conecta vault y manager
+        // Deploy and connect vault and manager
         manager = new StrategyManager(WETH);
         vault = new Vault(WETH, address(manager), address(this), founder);
         manager.initialize(address(vault));
 
-        // Configura al test contract como keeper oficial
+        // Configure the test contract as official keeper
         vault.setOfficialKeeper(address(this), true);
 
-        // Despliega estrategias con direcciones reales de Mainnet
+        // Deploy strategies with real Mainnet addresses
         aave_strategy = new AaveStrategy(address(manager), AAVE_POOL, AAVE_REWARDS, WETH, AAVE_TOKEN, UNISWAP_ROUTER, POOL_FEE);
         compound_strategy = new CompoundStrategy(address(manager), COMPOUND_COMET, COMPOUND_REWARDS, WETH, COMP_TOKEN, UNISWAP_ROUTER, POOL_FEE);
 
-        // Conecta estrategias al manager
+        // Connect strategies to the manager
         manager.addStrategy(address(aave_strategy));
         manager.addStrategy(address(compound_strategy));
     }
 
-    //* Funciones internas helpers
+    //* Internal helper functions
 
     /**
-     * @notice Helper de depósito utilizado en la mayoría de tests
-     * @dev Los helpers solo se usan para happy paths, no casos donde se espera revert
-     * @param user Usuario utilizado en la interacción
-     * @param amount Cantidad entregada al usuario
-     * @return shares Cantidad de shares minteadas al usuario tras el depósito
+     * @notice Deposit helper used in most tests
+     * @dev Helpers are only used for happy paths, not cases where a revert is expected
+     * @param user User used in the interaction
+     * @param amount Amount given to the user
+     * @return shares Amount of shares minted to the user after the deposit
      */
     function _deposit(address user, uint256 amount) internal returns (uint256 shares) {
-        // Entrega la cantidad de WETH al usuario y usa su address
+        // Give the amount of WETH to the user and use their address
         deal(WETH, user, amount);
         vm.startPrank(user);
 
-        // Aprueba al vault la transferencia de WETH y deposita la cantidad en el vault
+        // Approve the vault for the WETH transfer and deposit the amount into the vault
         IERC20(WETH).approve(address(vault), amount);
         shares = vault.deposit(amount, user);
 
@@ -91,132 +91,132 @@ contract FullFlowTest is Test {
     }
 
     /**
-     * @notice Helper de retiro utilizado en la mayoría de tests
-     * @dev Los helpers solo se usan para happy paths, no casos donde se espera revert
-     * @param user Usuario utilizado en la interacción
-     * @param amount Cantidad a retirar
-     * @return shares Cantidad de shares del usuario quemadas tras el retiro
+     * @notice Withdrawal helper used in most tests
+     * @dev Helpers are only used for happy paths, not cases where a revert is expected
+     * @param user User used in the interaction
+     * @param amount Amount to withdraw
+     * @return shares Amount of user shares burned after the withdrawal
      */
     function _withdraw(address user, uint256 amount) internal returns (uint256 shares) {
-        // Utiliza el address del usuario, retira la cantidad y devuelve las shares quemadas
+        // Use the user's address, withdraw the amount and return the burned shares
         vm.prank(user);
         shares = vault.withdraw(amount, user, user);
     }
 
-    //* Tests de integración: Flujos E2E
+    //* Integration tests: E2E Flows
 
     /**
-     * @notice Test E2E: Deposit → Allocation → Withdraw
-     * @dev El happy path completo de un usuario interactuando con el protocolo
-     *      Valida que los fondos fluyan correctamente: usuario → vault → manager → strategias → protocolos
-     *      y de vuelta al usuario al retirar
+     * @notice E2E Test: Deposit -> Allocation -> Withdraw
+     * @dev The complete happy path of a user interacting with the protocol
+     *      Validates that funds flow correctly: user -> vault -> manager -> strategies -> protocols
+     *      and back to the user when withdrawing
      */
     function test_E2E_DepositAllocateWithdraw() public {
-        // Alice deposita 50 WETH (supera threshold, se envía directamente a las estrategias)
+        // Alice deposits 50 WETH (exceeds threshold, sent directly to the strategies)
         uint256 deposit_amount = 50 ether;
         _deposit(alice, deposit_amount);
 
-        // Comprueba que: Idle buffer del vault vacío, assets en las estrategias mayores que 0
-        assertEq(vault.idle_buffer(), 0, "Idle buffer deberia estar vacio tras allocation");
-        assertGt(aave_strategy.totalAssets(), 0, "Aave deberia tener fondos");
-        assertGt(compound_strategy.totalAssets(), 0, "Compound deberia tener fondos");
+        // Check that: Vault's idle buffer is empty, assets in the strategies are greater than 0
+        assertEq(vault.idle_buffer(), 0, "Idle buffer should be empty after allocation");
+        assertGt(aave_strategy.totalAssets(), 0, "Aave should have funds");
+        assertGt(compound_strategy.totalAssets(), 0, "Compound should have funds");
 
-        // Comprueba que el total del protocolo sea aproximadamente lo depositado (tolerancia de 0.1%)
-        // Recuerda que vault.totalAssets suma idle buffer + manager.totalAssets
-        assertApproxEqRel(vault.totalAssets(), deposit_amount, 0.001e18, "Total assets incorrecto");
+        // Check that the protocol total is approximately the deposited amount (0.1% tolerance)
+        // Remember that vault.totalAssets sums idle buffer + manager.totalAssets
+        assertApproxEqRel(vault.totalAssets(), deposit_amount, 0.001e18, "Incorrect total assets");
 
-        // Alice retira 40 WETH netos (los fondos vuelven de las estrategias)
+        // Alice withdraws 40 net WETH (funds come back from the strategies)
         uint256 withdraw_amount = 40 ether;
         _withdraw(alice, withdraw_amount);
 
-        // Comprueba que Alice recibió aproximadamente la cantidad neta (tolerancia 2 wei por redondeo en estrategias)
-        assertApproxEqAbs(IERC20(WETH).balanceOf(alice), withdraw_amount, 2, "Alice no recibio WETH");
+        // Check that Alice received approximately the net amount (tolerance of 2 wei due to rounding in strategies)
+        assertApproxEqAbs(IERC20(WETH).balanceOf(alice), withdraw_amount, 2, "Alice did not receive WETH");
 
-        // Comprueba que Alice aún tiene shares por el resto no retirado
-        assertGt(vault.balanceOf(alice), 0, "Alice deberia tener shares restantes");
+        // Check that Alice still has shares for the remaining non-withdrawn portion
+        assertGt(vault.balanceOf(alice), 0, "Alice should have remaining shares");
     }
 
     /**
-     * @notice Test E2E: Múltiples usuarios depositando y retirando concurrentemente
-     * @dev Valida que las shares y assets se calculen correctamente cuando hay varios usuarios
-     *      en el vault simultáneamente. Es crucial para verificar que no hay comportamientos
-     *      extraños al entrar varios usuarios
+     * @notice E2E Test: Multiple users depositing and withdrawing concurrently
+     * @dev Validates that shares and assets are calculated correctly when there are multiple users
+     *      in the vault simultaneously. This is crucial to verify that there are no weird
+     *      behaviors when multiple users enter
      */
     function test_E2E_MultipleUsersConcurrent() public {
-        // Alice deposita 30 WETH y Bob deposita 20 WETH (total 50, supera threshold)
+        // Alice deposits 30 WETH and Bob deposits 20 WETH (total 50, exceeds threshold)
         uint256 alice_deposit = 30 ether;
         uint256 bob_deposit = 20 ether;
 
         uint256 alice_shares = _deposit(alice, alice_deposit);
         uint256 bob_shares = _deposit(bob, bob_deposit);
 
-        // Comprueba que ambos tienen shares proporcionales a su depósito (Alice > Bob)
-        assertGt(alice_shares, bob_shares, "Alice deberia tener mas shares que Bob");
+        // Check that both have shares proportional to their deposit (Alice > Bob)
+        assertGt(alice_shares, bob_shares, "Alice should have more shares than Bob");
 
-        // Comprueba que el TVL del protocolo sea igual a los depósitos (tolerancia de 0.1%)
+        // Check that the protocol TVL equals the deposits (0.1% tolerance)
         uint256 total_deposited = alice_deposit + bob_deposit;
-        assertApproxEqRel(vault.totalAssets(), total_deposited, 0.001e18, "Total incorrecto");
+        assertApproxEqRel(vault.totalAssets(), total_deposited, 0.001e18, "Incorrect total");
 
-        // Alice retira 20 WETH y comprueba que su balance de WETH sea el correcto (tolerancia 2 wei por redondeo)
+        // Alice withdraws 20 WETH and checks that her WETH balance is correct (tolerance of 2 wei due to rounding)
         _withdraw(alice, 20 ether);
-        assertApproxEqAbs(IERC20(WETH).balanceOf(alice), 20 ether, 2, "Alice no recibio 20 WETH");
+        assertApproxEqAbs(IERC20(WETH).balanceOf(alice), 20 ether, 2, "Alice did not receive 20 WETH");
 
-        // Bob retira 15 WETH y comprueba que su balance de WETH sea el correcto (tolerancia 2 wei por redondeo)
+        // Bob withdraws 15 WETH and checks that his WETH balance is correct (tolerance of 2 wei due to rounding)
         _withdraw(bob, 15 ether);
-        assertApproxEqAbs(IERC20(WETH).balanceOf(bob), 15 ether, 2, "Bob no recibio 15 WETH");
+        assertApproxEqAbs(IERC20(WETH).balanceOf(bob), 15 ether, 2, "Bob did not receive 15 WETH");
 
-        // Comprueba que ambos tengan shares restantes por lo que les queda depositado
-        assertGt(vault.balanceOf(alice), 0, "Alice deberia tener shares");
-        assertGt(vault.balanceOf(bob), 0, "Bob deberia tener shares");
+        // Check that both have remaining shares for what they still have deposited
+        assertGt(vault.balanceOf(alice), 0, "Alice should have shares");
+        assertGt(vault.balanceOf(bob), 0, "Bob should have shares");
     }
 
     /**
-     * @notice Test E2E: Deposit → Allocation → Rebalance → Withdraw
-     * @dev Valida el flujo completo incluyendo rebalanceo entre estrategias
-     *      Cambia el max allocation para forzar desbalance y comprobar que el rebalance
-     *      mueva fondos correctamente sin perder assets
+     * @notice E2E Test: Deposit -> Allocation -> Rebalance -> Withdraw
+     * @dev Validates the complete flow including rebalancing between strategies
+     *      Changes max allocation to force imbalance and verify that the rebalance
+     *      moves funds correctly without losing assets
      */
     function test_E2E_DepositRebalanceWithdraw() public {
-        // Alice deposita 100 WETH (supera threshold, se envía a estrategias)
+        // Alice deposits 100 WETH (exceeds threshold, sent to strategies)
         _deposit(alice, 100 ether);
 
-        // Guarda el total antes del rebalance (100 WETH)
+        // Save the total before the rebalance (100 WETH)
         uint256 total_before = vault.totalAssets();
 
-        // Cambia el max allocation (pasa 50% al 40%) para forzar un desbalance
+        // Change max allocation (from 50% to 40%) to force an imbalance
         manager.setMaxAllocationPerStrategy(4000);
 
-        // Si shouldRebalance es true, ejecuta rebalance
+        // If shouldRebalance is true, execute rebalance
         if (manager.shouldRebalance()) {
             manager.rebalance();
         }
 
-        // Comprueba que tras el rebalance de assets entre estrategias no se perdieron fondos en el vault
-        // de nuevo, con un margen de tolerancia de 0.1%
-        assertApproxEqRel(vault.totalAssets(), total_before, 0.01e18, "Se perdieron fondos en rebalance");
+        // Check that after the rebalance of assets between strategies no funds were lost in the vault
+        // again, with a tolerance margin of 0.1%
+        assertApproxEqRel(vault.totalAssets(), total_before, 0.01e18, "Funds were lost in rebalance");
 
-        // Alice retira 80 WETH y comprueba que su balance de WETH es correcto (tolerancia 2 wei por redondeo)
+        // Alice withdraws 80 WETH and checks that her WETH balance is correct (tolerance of 2 wei due to rounding)
         _withdraw(alice, 80 ether);
-        assertApproxEqAbs(IERC20(WETH).balanceOf(alice), 80 ether, 2, "Alice no recibio fondos post-rebalance");
+        assertApproxEqAbs(IERC20(WETH).balanceOf(alice), 80 ether, 2, "Alice did not receive funds post-rebalance");
     }
 
     /**
-     * @notice Test E2E: Deposit → Pause → Unpause → Withdraw
-     * @dev Valida que el vault sigue operando correctamente tras una pausa
-     *      Los fondos deben estar funcionando correctamente en las estrategias
-     *      durante la pausa y ser retirables normalmente tras despausar
+     * @notice E2E Test: Deposit -> Pause -> Unpause -> Withdraw
+     * @dev Validates that the vault continues operating correctly after a pause
+     *      The funds should be working correctly in the strategies
+     *      during the pause and be withdrawable normally after unpausing
      */
     function test_E2E_PauseUnpauseRecovery() public {
-        // Alice deposita 50 WETH (supera threshold, se envía a estrategias)
+        // Alice deposits 50 WETH (exceeds threshold, sent to strategies)
         _deposit(alice, 50 ether);
 
-        // Guarda el total antes del rebalance (50 WETH)
+        // Save the total before the pause (50 WETH)
         uint256 total_before_pause = vault.totalAssets();
 
-        // Owner pausa el vault
+        // Owner pauses the vault
         vault.pause();
 
-        // Intenta depositar con Bob. Espera error, comprobando que no se puede por estar pausado
+        // Try to deposit with Bob. Expect an error, checking that it can't be done because it's paused
         deal(WETH, bob, 10 ether);
         vm.startPrank(bob);
 
@@ -227,76 +227,76 @@ contract FullFlowTest is Test {
 
         vm.stopPrank();
 
-        // Comprueba que el vault sigue teniendo los fondos depositados por Alice en las estrategias
-        assertApproxEqRel(vault.totalAssets(), total_before_pause, 0.001e18, "Fondos perdidos durante pausa");
+        // Check that the vault still has the funds deposited by Alice in the strategies
+        assertApproxEqRel(vault.totalAssets(), total_before_pause, 0.001e18, "Funds lost during pause");
 
-        // Owner despausa el vault
+        // Owner unpauses the vault
         vault.unpause();
 
-        // Alice retira 40 ETH y comprueba que su balance de WETH es correcto (tolerancia 2 wei por redondeo)
+        // Alice withdraws 40 ETH and checks that her WETH balance is correct (tolerance of 2 wei due to rounding)
         _withdraw(alice, 40 ether);
-        assertApproxEqAbs(IERC20(WETH).balanceOf(alice), 40 ether, 2, "Alice no pudo retirar post-unpause");
+        assertApproxEqAbs(IERC20(WETH).balanceOf(alice), 40 ether, 2, "Alice could not withdraw post-unpause");
     }
 
     /**
-     * @notice Test E2E: Deposit → Remove Strategy → Withdraw
-     * @dev Simula migración: se elimina una estrategia y los usuarios pueden seguir retirando
-     *      Este test es muy importante para comprobar que la eliminación de una estrategia no
-     *      deja fondos bloqueados
+     * @notice E2E Test: Deposit -> Remove Strategy -> Withdraw
+     * @dev Simulates migration: a strategy is removed and users can still withdraw
+     *      This test is very important to verify that removing a strategy does not
+     *      leave funds locked
      */
     function test_E2E_RemoveStrategyAndWithdraw() public {
-        // Alice deposita 50 WETH (se envía directamente a las estrategias)
+        // Alice deposits 50 WETH (sent directly to the strategies)
         _deposit(alice, 50 ether);
 
-        // Guarda el balance de Compound antes de eliminar la estrategia
+        // Save the Compound balance before removing the strategy
         uint256 compound_assets = compound_strategy.totalAssets();
 
-        // Retira los fondos de Compound (usando el address del manager para hacer la llamada)
-        // vm.prank -> Solo la siguiente llamada, vm.startPrank -> hasta que se haga stopPrank
+        // Withdraw the funds from Compound (using the manager's address to make the call)
+        // vm.prank -> Only the next call, vm.startPrank -> until stopPrank is called
         if (compound_assets > 0) {
             vm.prank(address(manager));
             compound_strategy.withdraw(compound_assets);
         }
 
-        // Elimina la estrategia de Compound (index 1) y comprueba que solo quede 1 estrategia disponible (Aave)
+        // Remove the Compound strategy (index 1) and check that only 1 strategy remains available (Aave)
         manager.removeStrategy(1);
-        assertEq(manager.strategiesCount(), 1, "Deberia quedar 1 estrategia");
+        assertEq(manager.strategiesCount(), 1, "There should be 1 strategy remaining");
 
-        // Guarda el balance de WETH en la estrtegia de Aave y se retira la mitad. Tras eliminar una
-        // estrategia se hace un rebalance, por lo que Aave debería tener el 50% del TVL (25 WETH) máximo
-        // y el otro debería estar en el balance del manager esperando una nueva estrategia
+        // Save the WETH balance in the Aave strategy and withdraw half. After removing a
+        // strategy a rebalance is done, so Aave should have at most 50% of TVL (25 WETH)
+        // and the rest should be in the manager's balance waiting for a new strategy
         uint256 aave_assets = aave_strategy.totalAssets();
         uint256 safe_withdraw = aave_assets / 2;
 
-        // Alice realiza el retiro y comprueba que su balance de WETH es correcto
+        // Alice performs the withdrawal and checks that her WETH balance is correct
         _withdraw(alice, safe_withdraw);
-        assertEq(IERC20(WETH).balanceOf(alice), safe_withdraw, "Alice no pudo retirar post-remove");
+        assertEq(IERC20(WETH).balanceOf(alice), safe_withdraw, "Alice could not withdraw post-remove");
     }
 
     /**
-     * @notice Test E2E: Yield accrual con paso del tiempo
-     * @dev Avanza el tiempo 30 días para comprobar que los aTokens y cTokens acumulan yield real.
-     *      Este test valida que el protocolo se beneficia del yield de Aave y Compound
+     * @notice E2E Test: Yield accrual with time passing
+     * @dev Advances time 30 days to verify that aTokens and cTokens accumulate real yield.
+     *      This test validates that the protocol benefits from Aave and Compound yield
      */
     function test_E2E_YieldAccrual() public {
-        // Alice deposita 100 WETH
+        // Alice deposits 100 WETH
         _deposit(alice, 100 ether);
 
-        // Guarda el total de assets del protocolo antes de avanzar el tiempo
+        // Save the protocol's total assets before advancing time
         uint256 total_before = vault.totalAssets();
 
-        // Avanza 30 días para acumular yield
+        // Advance 30 days to accumulate yield
         vm.warp(block.timestamp + 30 days);
 
-        // Comprueba que el total de assets creció (yield acumulado)
+        // Check that total assets grew (yield accumulated)
         uint256 total_after = vault.totalAssets();
-        assertGt(total_after, total_before, "El vault deberia haber acumulado yield");
+        assertGt(total_after, total_before, "The vault should have accumulated yield");
 
-        // Calcula el yield generado
+        // Calculate the generated yield
         uint256 yield_earned = total_after - total_before;
 
-        // Comprueba que el yield sea razonable (entre 0.01% y 5% en 30 días) si no algo raro hay
-        assertGt(yield_earned, total_before / 10000, "Yield demasiado bajo");
-        assertLt(yield_earned, (total_before * 5) / 100, "Yield sospechosamente alto");
+        // Check that the yield is reasonable (between 0.01% and 5% in 30 days), if not something is off
+        assertGt(yield_earned, total_before / 10000, "Yield too low");
+        assertLt(yield_earned, (total_before * 5) / 100, "Yield suspiciously high");
     }
 }

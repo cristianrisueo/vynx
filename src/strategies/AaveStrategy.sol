@@ -13,90 +13,90 @@ import {ISwapRouter} from "@uniswap/v3-periphery/contracts/interfaces/ISwapRoute
 /**
  * @title AaveStrategy
  * @author cristianrisueo
- * @notice Estrategia que deposita assets en Aave v3 para generar yield
- * @dev Implementa IStrategy para integracion con StrategyManager
+ * @notice Strategy that deposits assets into Aave v3 to generate yield
+ * @dev Implements IStrategy for integration with StrategyManager
  */
 contract AaveStrategy is IStrategy {
     //* library attachments
 
     /**
-     * @notice Usa SafeERC20 para todas las operaciones de IERC20 de manera segura
-     * @dev Evita errores comunes con tokens legacy o mal implementados
+     * @notice Uses SafeERC20 for all IERC20 operations in a safe manner
+     * @dev Avoids common errors with legacy or poorly implemented tokens
      */
     using SafeERC20 for IERC20;
 
-    //* Errores
+    //* Errors
 
     /**
-     * @notice Error cuando el depósito en Aave falla
+     * @notice Error when the deposit into Aave fails
      */
     error AaveStrategy__DepositFailed();
 
     /**
-     * @notice Error cuando el retiro de Aave falla
+     * @notice Error when the withdrawal from Aave fails
      */
     error AaveStrategy__WithdrawFailed();
 
     /**
-     * @notice Error cuando solo el strategy manager puede llamar
+     * @notice Error when only the strategy manager can call
      */
     error AaveStrategy__OnlyManager();
 
     /**
-     * @notice Error cuando el harvest falla al reclamar rewards
+     * @notice Error when the harvest fails to claim rewards
      */
     error AaveStrategy__HarvestFailed();
 
     /**
-     * @notice Error cuando el swap de rewards a assets falla
+     * @notice Error when the swap from rewards to assets fails
      */
     error AaveStrategy__SwapFailed();
 
-    //* Constantes
+    //* Constants
 
-    /// @notice Base para calculos de basis points (10000 = 100%)
+    /// @notice Base for basis points calculations (10000 = 100%)
     uint256 private constant BASIS_POINTS = 10000;
 
-    /// @notice Slippage maximo permitido en swaps en bps (100 = 1%)
+    /// @notice Maximum allowed slippage in swaps in bps (100 = 1%)
     uint256 private constant MAX_SLIPPAGE_BPS = 100;
 
-    //* Variables de estado
+    //* State variables
 
-    /// @notice Direccion del StrategyManager autorizado
+    /// @notice Address of the authorized StrategyManager
     address public immutable manager;
 
-    /// @notice Instancia del Pool de Aave v3
+    /// @notice Aave v3 Pool instance
     IPool private immutable aave_pool;
 
-    /// @notice Instancia del controlador de rewards de Aave v3
+    /// @notice Aave v3 rewards controller instance
     IRewardsController private immutable rewards_controller;
 
-    /// @notice Direccion del asset subyacente
+    /// @notice Address of the underlying asset
     address private immutable asset_address;
 
-    /// @notice Instancia del token que representa los assets depositados en Aave
+    /// @notice Instance of the token representing assets deposited in Aave
     IAToken private immutable a_token;
 
     /**
-     * @notice Direccion del token de rewards de Aave (supongo que es el de gobernanza)
-     * @dev Es el token que te regala Aave por depositar liquidez, no confundir
-     *      con aToken. Este token es un extra yield de regalo que va a parte
+     * @notice Address of the Aave rewards token (I guess it's the governance one)
+     * @dev This is the token that Aave gives you for depositing liquidity, don't confuse
+     *      it with aToken. This token is an extra yield gift that goes separately
      */
     address private immutable reward_token;
 
-    /// @notice Instancia del router de Uniswap v3 para swaps
+    /// @notice Uniswap v3 router instance for swaps
     ISwapRouter private immutable uniswap_router;
 
     /**
-     * @notice Fee tier de Uniswap v3 para el pool reward/asset (3000 = 0.3%)
-     * @dev Recuerdas que un pool de V3 lo define el par de tokens y el fee tier?
+     * @notice Uniswap v3 fee tier for the reward/asset pool (3000 = 0.3%)
+     * @dev Remember that a V3 pool is defined by the token pair and the fee tier?
      */
     uint24 private immutable pool_fee;
 
-    //* Modificadores
+    //* Modifiers
 
     /**
-     * @notice Solo permite llamadas del StrategyManager
+     * @notice Only allows calls from the StrategyManager
      */
     modifier onlyManager() {
         if (msg.sender != manager) revert AaveStrategy__OnlyManager();
@@ -106,15 +106,15 @@ contract AaveStrategy is IStrategy {
     //* Constructor
 
     /**
-     * @notice Constructor de AaveStrategy
-     * @dev Inicializa la estrategia con Aave v3 y aprueba los contratos necesarios
-     * @param _manager Direccion del StrategyManager
-     * @param _aave_pool Direccion del Pool de Aave v3
-     * @param _rewards_controller Direccion del RewardsController de Aave v3
-     * @param _asset Direccion del asset subyacente
-     * @param _reward_token Direccion del token de rewards (AAVE)
-     * @param _uniswap_router Direccion del SwapRouter de Uniswap v3
-     * @param _pool_fee Fee tier del pool Uniswap (3000 = 0.3%)
+     * @notice AaveStrategy constructor
+     * @dev Initializes the strategy with Aave v3 and approves the necessary contracts
+     * @param _manager Address of the StrategyManager
+     * @param _aave_pool Address of the Aave v3 Pool
+     * @param _rewards_controller Address of the Aave v3 RewardsController
+     * @param _asset Address of the underlying asset
+     * @param _reward_token Address of the rewards token (AAVE)
+     * @param _uniswap_router Address of the Uniswap v3 SwapRouter
+     * @param _pool_fee Fee tier of the Uniswap pool (3000 = 0.3%)
      */
     constructor(
         address _manager,
@@ -125,7 +125,7 @@ contract AaveStrategy is IStrategy {
         address _uniswap_router,
         uint24 _pool_fee
     ) {
-        // Asigna addresses, inicializa contratos y establece el fee tier de UV3
+        // Assigns addresses, initializes contracts and sets the UV3 fee tier
         manager = _manager;
         aave_pool = IPool(_aave_pool);
         rewards_controller = IRewardsController(_rewards_controller);
@@ -134,28 +134,28 @@ contract AaveStrategy is IStrategy {
         uniswap_router = ISwapRouter(_uniswap_router);
         pool_fee = _pool_fee;
 
-        // Obtiene la direccion del aToken dinamicamente desde Aave
+        // Gets the aToken address dynamically from Aave
         address a_token_address = aave_pool.getReserveData(_asset).aTokenAddress;
         a_token = IAToken(a_token_address);
 
-        // Aprueba Aave Pool para mover todos los assets de este contrato
+        // Approves Aave Pool to move all assets from this contract
         IERC20(_asset).forceApprove(_aave_pool, type(uint256).max);
 
-        // Aprueba Uniswap Router para mover todos los rewards tokens de este contrato
+        // Approves Uniswap Router to move all rewards tokens from this contract
         IERC20(_reward_token).forceApprove(_uniswap_router, type(uint256).max);
     }
 
-    //* Funciones principales
+    //* Main functions
 
     /**
-     * @notice Deposita assets en Aave v3
-     * @dev Solo puede ser llamado por el StrategyManager
-     * @dev Asume que los assets ya fueron transferidos a este contrato desde StrategyManager
-     * @param assets Cantidad de assets a depositar en Aave
-     * @return shares En Aave es 1:1, devuelve la misma cantidad de aToken
+     * @notice Deposits assets into Aave v3
+     * @dev Can only be called by the StrategyManager
+     * @dev Assumes the assets were already transferred to this contract from StrategyManager
+     * @param assets Amount of assets to deposit into Aave
+     * @return shares In Aave it's 1:1, returns the same amount of aToken
      */
     function deposit(uint256 assets) external onlyManager returns (uint256 shares) {
-        // Realiza el depósito, devuelve el aToken y emite evento. En caso de error revierte
+        // Performs the deposit, returns the aToken and emits event. Reverts on error
         try aave_pool.supply(asset_address, assets, address(this), 0) {
             shares = assets;
             emit Deposited(msg.sender, assets, shares);
@@ -165,15 +165,15 @@ contract AaveStrategy is IStrategy {
     }
 
     /**
-     * @notice Retira assets de Aave v3
-     * @dev Solo puede ser llamado por el StrategyManager
-     * @dev Transfiere los assets retirados directamente a StrategyManager
-     * @param assets Cantidad de assets a retirar de Aave
-     * @return actual_withdrawn Assets realmente retirados (incluye yield)
+     * @notice Withdraws assets from Aave v3
+     * @dev Can only be called by the StrategyManager
+     * @dev Transfers the withdrawn assets directly to StrategyManager
+     * @param assets Amount of assets to withdraw from Aave
+     * @return actual_withdrawn Assets actually withdrawn (includes yield)
      */
     function withdraw(uint256 assets) external onlyManager returns (uint256 actual_withdrawn) {
-        // Realiza withdraw de Aave (quema aToken, recibe asset + yield). Transfiere a
-        // StrategyManager y emite evento. En caso de error revierte
+        // Performs withdraw from Aave (burns aToken, receives asset + yield). Transfers to
+        // StrategyManager and emits event. Reverts on error
         try aave_pool.withdraw(asset_address, assets, address(this)) returns (uint256 withdrawn) {
             actual_withdrawn = withdrawn;
             IERC20(asset_address).safeTransfer(msg.sender, actual_withdrawn);
@@ -184,44 +184,44 @@ contract AaveStrategy is IStrategy {
     }
 
     /**
-     * @notice Cosecha rewards de Aave, los swapea a assets y reinvierte en Aave de nuevo
-     * @dev Solo puede ser llamado por el StrategyManager
-     * @dev Reclama rewards de Aave, los swapea por assets via Uniswap v3 y los deposita
-     *      de vuelta en Aave para maximizar yield compuesto
-     * @return profit Cantidad de assets obtenidos tras swap y reinversion de rewards
+     * @notice Harvests rewards from Aave, swaps them to assets and reinvests into Aave again
+     * @dev Can only be called by the StrategyManager
+     * @dev Claims rewards from Aave, swaps them for assets via Uniswap v3 and deposits them
+     *      back into Aave to maximize compound yield
+     * @return profit Amount of assets obtained after swap and reinvestment of rewards
      */
     function harvest() external onlyManager returns (uint256 profit) {
-        // Construye array de assets (solo aToken) para reclamar los rewards
+        // Builds array of assets (only aToken) to claim the rewards
         address[] memory assets_to_claim = new address[](1);
         assets_to_claim[0] = address(a_token);
 
-        // Reclama los rewards acumulados para el aToken en Aave. En caso de error revierte
+        // Claims the accumulated rewards for the aToken in Aave. Reverts on error
         try rewards_controller.claimAllRewards(assets_to_claim, address(this)) returns (
             address[] memory, uint256[] memory claimed_amounts
         ) {
-            // Si no hay rewards que reclamar, retorna 0
+            // If there are no rewards to claim, return 0
             if (claimed_amounts.length == 0 || claimed_amounts[0] == 0) {
                 return 0;
             }
 
-            // En caso de que si haya rewards a reclamar calcula el min amount esperado en el swap.
-            // Hacemos esto para prevenir slippage (no debería haber igualmente, pero mejor prevenir)
+            // In case there are rewards to claim, calculates the min expected amount in the swap.
+            // We do this to prevent slippage (there shouldn't be any anyway, but better safe than sorry)
             uint256 min_amount_out = (claimed_amounts[0] * (BASIS_POINTS - MAX_SLIPPAGE_BPS)) / BASIS_POINTS;
 
-            // Crea los parámetros de los parámetros de llamada al pool de Uniswap V3 para hacer el swap
+            // Creates the parameters for the Uniswap V3 pool call to perform the swap
             ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
                 tokenIn: reward_token, // Token A
                 tokenOut: asset_address, // Token B
-                fee: pool_fee, // Fee tier (con estos 3 ya hemos decidido el pool)
-                recipient: address(this), // Address que recibe el swap (este contrato)
-                deadline: block.timestamp, // A ejecutar en este bloque
-                amountIn: claimed_amounts[0], // Cantidad del token A a swapear
-                amountOutMinimum: min_amount_out, // Mínima cantidad esperada del Token B
-                sqrtPriceLimitX96: 0 // Ni puta idea
+                fee: pool_fee, // Fee tier (with these 3 we've already decided the pool)
+                recipient: address(this), // Address that receives the swap (this contract)
+                deadline: block.timestamp, // To be executed in this block
+                amountIn: claimed_amounts[0], // Amount of token A to swap
+                amountOutMinimum: min_amount_out, // Minimum expected amount of Token B
+                sqrtPriceLimitX96: 0 // No fucking clue
             });
 
-            // Realiza la llamada. Si todo va bien reinvierte los assets obtenidos tras el swap, devuelve
-            // la cantidad de assets obtenidos y emite un evento. En caso de error revierte
+            // Makes the call. If all goes well, reinvests the assets obtained after the swap, returns
+            // the amount of assets obtained and emits an event. Reverts on error
             try uniswap_router.exactInputSingle(params) returns (uint256 amount_out) {
                 aave_pool.supply(asset_address, amount_out, address(this), 0);
                 profit = amount_out;
@@ -234,78 +234,78 @@ contract AaveStrategy is IStrategy {
         }
     }
 
-    //* Funciones de consulta
+    //* Query functions
 
     /**
-     * @notice Devuelve el total de assets bajo gestion en Aave
-     * @dev Los aTokens hacen rebase automatico, el balance ya incluye yield
-     *      por lo que no hay que hacer cálculos extra
-     * @return total Cantidad de assets depositados + yield acumulado
+     * @notice Returns the total assets under management in Aave
+     * @dev aTokens rebase automatically, the balance already includes yield
+     *      so no extra calculations are needed
+     * @return total Amount of deposited assets + accumulated yield
      */
     function totalAssets() external view returns (uint256 total) {
         return a_token.balanceOf(address(this));
     }
 
     /**
-     * @notice Devuelve el APY actual de Aave
-     * @dev Convierte de RAY (1e27, unidad interna de Aave) a basis points (1e4)
+     * @notice Returns the current Aave APY
+     * @dev Converts from RAY (1e27, Aave's internal unit) to basis points (1e4)
      *      RAY / 1e23 = basis points
-     * @return apy_basis_points APY en basis points (350 = 3.5%)
+     * @return apy_basis_points APY in basis points (350 = 3.5%)
      */
     function apy() external view returns (uint256 apy_basis_points) {
-        // Obtiene los datos de las reservas del asset en Aave
+        // Gets the reserve data for the asset in Aave
         DataTypes.ReserveData memory reserve_data = aave_pool.getReserveData(asset_address);
         uint256 liquidity_rate = reserve_data.currentLiquidityRate;
 
-        // Devuelve el APY (liquidity rate) casteado a basis points
+        // Returns the APY (liquidity rate) cast to basis points
         apy_basis_points = liquidity_rate / 1e23;
     }
 
     /**
-     * @notice Devuelve el nombre de la estrategia
-     * @return strategy_name Nombre descriptivo de la estrategia
+     * @notice Returns the strategy name
+     * @return strategy_name Descriptive name of the strategy
      */
     function name() external pure returns (string memory strategy_name) {
         return "Aave v3 Strategy";
     }
 
     /**
-     * @notice Devuelve el address del asset
-     * @return asset_address Direccion del asset subyacente
+     * @notice Returns the asset address
+     * @return asset_address Address of the underlying asset
      */
     function asset() external view returns (address) {
         return asset_address;
     }
 
     /**
-     * @notice Devuelve la liquidez disponible en Aave para withdraws
-     * @dev Util para comprobar si hay suficiente liquidez antes de retirar
-     * @return available Cantidad de assets disponibles en Aave
+     * @notice Returns the available liquidity in Aave for withdrawals
+     * @dev Useful to check if there is enough liquidity before withdrawing
+     * @return available Amount of assets available in Aave
      */
     function availableLiquidity() external view returns (uint256 available) {
         return IERC20(asset_address).balanceOf(address(a_token));
     }
 
     /**
-     * @notice Devuelve el balance de aToken de este contrato
-     * @return balance Cantidad de aToken que posee el contrato
+     * @notice Returns the aToken balance of this contract
+     * @return balance Amount of aToken that the contract holds
      */
     function aTokenBalance() external view returns (uint256 balance) {
         return a_token.balanceOf(address(this));
     }
 
     /**
-     * @notice Devuelve los rewards pendientes de reclamar
-     * @dev Util para estimar profit del harvest antes de ejecutarlo
-     * @return pending Cantidad de rewards (AAVE) pendientes
+     * @notice Returns the pending rewards to claim
+     * @dev Useful to estimate harvest profit before executing it
+     * @return pending Amount of pending rewards (AAVE)
      */
     function pendingRewards() external view returns (uint256 pending) {
-        // Crea un array con el address del aToken (Aave lo necesita en un array, supongo)
+        // Creates an array with the aToken address (Aave needs it in an array, I guess)
         address[] memory assets_to_check = new address[](1);
         assets_to_check[0] = address(a_token);
 
-        // Realiza la llamada a Aave para obtener el balance de los rewards de este contrato
-        // realmente el balance del reward token (pero anyway)
+        // Makes the call to Aave to get the rewards balance of this contract
+        // really the reward token balance (but anyway)
         return rewards_controller.getUserRewards(assets_to_check, address(this), reward_token);
     }
 }

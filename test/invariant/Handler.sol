@@ -8,72 +8,72 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 /**
  * @title Handler
  * @author cristianrisueo
- * @notice Contrato intermediario que acota las llamadas al vault para invariant testing
- * @dev Sin un handler, Foundry llamaría funciones con inputs inválidos y perdería
- *      el 99% del tiempo en reverts inútiles. El handler garantiza que las llamadas
- *      tengan sentido, permitiendo al fuzzer encontrar bugs reales
+ * @notice Intermediary contract that bounds calls to the vault for invariant testing
+ * @dev Without a handler, Foundry would call functions with invalid inputs and waste
+ *      99% of the time on useless reverts. The handler ensures that calls
+ *      make sense, allowing the fuzzer to find real bugs
  */
 contract Handler is Test {
-    //* Variables de estado
+    //* State variables
 
-    /// @notice Instancia del vault a testear
+    /// @notice Instance of the vault being tested
     Vault public vault;
 
-    /// @notice Dirección del contrato WETH en Mainnet
+    /// @notice WETH contract address on Mainnet
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
 
-    /// @notice Lista de usuarios simulados
+    /// @notice List of simulated users
     address[] public actors;
 
-    /// @notice Variables fantasma: total depositado y total retirado (para verificar solvencia)
+    /// @notice Ghost variables: total deposited and total withdrawn (for solvency verification)
     uint256 public ghost_totalDeposited;
     uint256 public ghost_totalWithdrawn;
 
     //* Constructor
 
     /**
-     * @notice Inicializa el handler con el vault y los actores disponibles
-     * @param _vault Instancia del vault a testear
-     * @param _actors Lista de direcciones que pueden interactuar
+     * @notice Initializes the handler with the vault and available actors
+     * @param _vault Instance of the vault to test
+     * @param _actors List of addresses that can interact
      */
     constructor(Vault _vault, address[] memory _actors) {
         vault = _vault;
         actors = _actors;
     }
 
-    //* Acciones acotadas que el fuzzer puede ejecutar
+    //* Bounded actions that the fuzzer can execute
 
     /**
-     * @notice Acción: Depositar en el vault con inputs acotados
-     * @dev El fuzzer elige un actor aleatorio y un amount válido,
-     *      acota amount entre min_deposit y lo que queda de TVL
-     * @param actor_seed Seed para elegir un actor aleatorio
-     * @param amount Cantidad aleatoria a depositar
+     * @notice Action: Deposit into the vault with bounded inputs
+     * @dev The fuzzer picks a random actor and a valid amount,
+     *      bounds amount between min_deposit and what's left of TVL
+     * @param actor_seed Seed to pick a random actor
+     * @param amount Random amount to deposit
      */
     function deposit(uint256 actor_seed, uint256 amount) external {
-        // Elige un actor aleatorio del array
+        // Pick a random actor from the array
         address actor = actors[actor_seed % actors.length];
 
-        // Obtiene TVL máximo permitido y TVL actual
+        // Get the maximum allowed TVL and current TVL
         uint256 max_tvl = vault.max_tvl();
         uint256 current_total = vault.totalAssets();
 
-        // Si ya se ha superado el máximo TVL permitido, no hace nada
+        // If the maximum allowed TVL has already been exceeded, do nothing
         if (current_total >= max_tvl) return;
 
-        // Calcula el espacio disponible en el vault (max_tvl - tvl_actual)
+        // Calculate the available space in the vault (max_tvl - current_tvl)
         uint256 available = max_tvl - current_total;
 
-        // Obtiene el mínimo depósito (0.001 WETH creo recordar)
+        // Get the minimum deposit (0.001 WETH if I remember correctly)
         uint256 min = vault.min_deposit();
 
-        // Si no hay espacio suficiente para el depósito mínimo, no hace nada
+        // If there's not enough space for the minimum deposit, do nothing
         if (available < min) return;
 
-        // Acota amount al rango válido
+        // Bound amount to the valid range
         amount = bound(amount, min, available);
 
-        // Ejecuta el depósito como el actor elegido
+        // Execute the deposit as the chosen actor
         deal(WETH, actor, amount);
         vm.startPrank(actor);
 
@@ -82,49 +82,49 @@ contract Handler is Test {
 
         vm.stopPrank();
 
-        // Actualiza ghost variable para tracking
+        // Update ghost variable for tracking
         ghost_totalDeposited += amount;
     }
 
     /**
-     * @notice Acción: Retirar del vault con inputs acotados
-     * @dev Solo retira si el actor tiene shares. Acota el retiro al máximo posible
-     * @param actor_seed Seed para elegir un actor aleatorio
-     * @param amount Cantidad aleatoria a retirar
+     * @notice Action: Withdraw from the vault with bounded inputs
+     * @dev Only withdraws if the actor has shares. Bounds the withdrawal to the maximum possible
+     * @param actor_seed Seed to pick a random actor
+     * @param amount Random amount to withdraw
      */
     function withdraw(uint256 actor_seed, uint256 amount) external {
-        // Elige un actor aleatorio
+        // Pick a random actor
         address actor = actors[actor_seed % actors.length];
 
-        // Comprueba que el actor tenga shares
+        // Check that the actor has shares
         uint256 actor_shares = vault.balanceOf(actor);
         if (actor_shares == 0) return;
 
-        // Calcula el máximo que puede retirar (neto, después de fees)
-        // previewRedeem devuelve assets netos que recibiría por sus shares
+        // Calculate the maximum they can withdraw (net, after fees)
+        // previewRedeem returns net assets they would receive for their shares
         uint256 max_withdraw = vault.previewRedeem(actor_shares);
         if (max_withdraw == 0) return;
 
-        // Acota amount al rango posible (mínimo 1 wei para evitar ZeroAmount)
+        // Bound amount to the possible range (minimum 1 wei to avoid ZeroAmount)
         amount = bound(amount, 1, max_withdraw);
 
-        // Ejecuta el retiro
+        // Execute the withdrawal
         vm.prank(actor);
         vault.withdraw(amount, actor, actor);
 
-        // Actualiza ghost variable
+        // Update ghost variable
         ghost_totalWithdrawn += amount;
     }
 
     /**
-     * @notice Acción: Ejecuta harvest (cosecha rewards de estrategias)
-     * @dev Accion aleatoria 3: keeper ejecuta harvest si hay profit minimo
+     * @notice Action: Execute harvest (collects rewards from strategies)
+     * @dev Random action 3: keeper executes harvest if there's minimum profit
      */
     function harvest() external {
-        // Skip tiempo para acumular yield
+        // Skip time to accumulate yield
         skip(bound(block.timestamp, 1 days, 7 days));
 
-        // Solo harvest si hay suficiente profit
+        // Only harvest if there's enough profit
         if (vault.totalAssets() > vault.min_profit_for_harvest()) {
             vault.harvest();
         }

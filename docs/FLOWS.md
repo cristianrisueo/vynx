@@ -1,20 +1,20 @@
-# Flujos de Usuario
+# User Flows
 
-Este documento describe los flujos de usuario paso a paso de VynX V1, con diagramas de secuencia y ejemplos numéricos concretos.
+This document describes the step-by-step user flows of VynX V1, with sequence diagrams and concrete numerical examples.
 
 ---
 
-## 1. Flujo de Deposit
+## 1. Deposit Flow
 
-### Descripción General
+### General Description
 
-El usuario deposita WETH en el vault y recibe shares (vxWETH). El WETH se acumula en el idle buffer hasta alcanzar el threshold (10 ETH), momento en el cual se auto-invierte en las estrategias.
+The user deposits WETH into the vault and receives shares (vxWETH). The WETH accumulates in the idle buffer until reaching the threshold (10 ETH), at which point it auto-invests into the strategies.
 
-### Flujo Paso a Paso
+### Step-by-Step Flow
 
 ```
 ┌─────────┐          ┌──────────┐          ┌────────────┐          ┌──────────┐          ┌───────────┐
-│ Usuario │          │  Vault   │          │  Manager   │          │ Strategy │          │ Protocol  │
+│  User   │          │  Vault   │          │  Manager   │          │ Strategy │          │ Protocol  │
 └────┬────┘          └────┬─────┘          └─────┬──────┘          └────┬─────┘          └─────┬─────┘
      │                    │                      │                       │                      │
      │ 1. approve(vault)  │                      │                       │                      │
@@ -23,12 +23,12 @@ El usuario deposita WETH en el vault y recibe shares (vxWETH). El WETH se acumul
      │ 2. deposit(100)    │                      │                       │                      │
      ├───────────────────>│                      │                       │                      │
      │                    │                      │                       │                      │
-     │                    │ 3. Verifica:         │                       │                      │
+     │                    │ 3. Verifies:         │                       │                      │
      │                    │    - assets >= 0.01  │                       │                      │
      │                    │    - TVL + assets    │                       │                      │
      │                    │      <= max_tvl      │                       │                      │
      │                    │                      │                       │                      │
-     │                    │ 4. Calcula shares    │                       │                      │
+     │                    │ 4. Calculates shares │                       │                      │
      │                    │    previewDeposit()  │                       │                      │
      │                    │                      │                       │                      │
      │                    │ 5. transferFrom      │                       │                      │
@@ -73,72 +73,72 @@ El usuario deposita WETH en el vault y recibe shares (vxWETH). El WETH se acumul
      │                    │                      │                       │                      │
 ```
 
-### Detalle de Pasos
+### Step Details
 
-**1-2. Aprobación y Depósito**
+**1-2. Approval and Deposit**
 ```solidity
-// Usuario aprueba WETH al vault
+// User approves WETH to the vault
 IERC20(weth).approve(address(vault), 100 ether);
 
-// Usuario deposita 100 WETH
+// User deposits 100 WETH
 uint256 shares = vault.deposit(100 ether, msg.sender);
 ```
 
-**3. Verificaciones de Seguridad**
+**3. Security Checks**
 ```solidity
-// Verifica depósito mínimo
+// Verify minimum deposit
 if (assets < min_deposit) revert Vault__DepositBelowMinimum();
 // min_deposit = 0.01 ETH
 
-// Verifica circuit breaker
+// Verify circuit breaker
 if (totalAssets() + assets > max_tvl) revert Vault__MaxTVLExceeded();
 // max_tvl = 1000 ETH
 ```
 
-**4. Cálculo de Shares**
+**4. Shares Calculation**
 ```solidity
-// Si es primer depósito: shares = assets
-// Si ya hay TVL: shares = (assets * totalSupply) / totalAssets()
+// If first deposit: shares = assets
+// If TVL already exists: shares = (assets * totalSupply) / totalAssets()
 shares = previewDeposit(assets);
 
-// Ejemplo primer depósito:
+// First deposit example:
 // shares = 100 ether (1:1)
 
-// Ejemplo segundo depósito (TVL ya existe):
-// totalSupply = 1000 shares, totalAssets = 1050 WETH (yield acumulado)
+// Second deposit example (TVL already exists):
+// totalSupply = 1000 shares, totalAssets = 1050 WETH (accumulated yield)
 // shares = (100 * 1000) / 1050 = 95.24 shares
-// El segundo usuario paga el precio actual que refleja el yield
+// The second user pays the current price that reflects the yield
 ```
 
-**6. Acumulación en Idle Buffer**
+**6. Accumulation in Idle Buffer**
 ```solidity
-idle_buffer += assets;  // Acumula en buffer sin invertir aún
+idle_buffer += assets;  // Accumulates in buffer without investing yet
 ```
 
-**8-9. Auto-Allocate (Condicional)**
+**8-9. Auto-Allocate (Conditional)**
 ```solidity
 if (idle_buffer >= idle_threshold) {  // threshold = 10 ETH
     _allocateIdle();
 }
 ```
 
-**11. Cálculo de Weighted Allocation**
+**11. Weighted Allocation Calculation**
 ```solidity
-// Supongamos APYs:
+// Let's assume APYs:
 // Aave: 5% (500 bp), Compound: 5% (500 bp)
 // total_apy = 1000 bp
 
-// Target para Aave: (500 * 10000) / 1000 = 5000 bp = 50%
-// Target para Compound: (500 * 10000) / 1000 = 5000 bp = 50%
+// Target for Aave: (500 * 10000) / 1000 = 5000 bp = 50%
+// Target for Compound: (500 * 10000) / 1000 = 5000 bp = 50%
 
-// Aplica caps (max 50%, min 10%):
-// Aave: 50% (dentro de límites)
-// Compound: 50% (dentro de límites)
+// Apply caps (max 50%, min 10%):
+// Aave: 50% (within limits)
+// Compound: 50% (within limits)
 ```
 
-**12-17. Distribución a Estrategias**
+**12-17. Distribution to Strategies**
 ```solidity
-// Para cada estrategia:
+// For each strategy:
 uint256 amount_for_strategy = (assets * target) / 10000;
 
 // Aave: (100 * 5000) / 10000 = 50 WETH
@@ -148,25 +148,25 @@ IERC20(asset).safeTransfer(address(strategy), amount);
 strategy.deposit(amount);
 ```
 
-### Ejemplo Numérico Completo
+### Full Numerical Example
 
-**Escenario**: Alice deposita 5 ETH, Bob deposita 5 ETH (alcanza threshold), Charlie deposita 5 ETH.
+**Scenario**: Alice deposits 5 ETH, Bob deposits 5 ETH (reaches threshold), Charlie deposits 5 ETH.
 
-**Estado inicial:**
+**Initial state:**
 - `idle_buffer = 0`
 - `idle_threshold = 10 ETH`
 
-**1. Alice deposita 5 ETH**
+**1. Alice deposits 5 ETH**
 ```
 idle_buffer = 5 ETH
-shares_alice = 5 ETH (primer depósito, 1:1)
+shares_alice = 5 ETH (first deposit, 1:1)
 totalSupply = 5 shares
-totalAssets = 5 ETH (todo en idle)
+totalAssets = 5 ETH (all in idle)
 
 ❌ NO auto-allocate (5 < 10)
 ```
 
-**2. Bob deposita 5 ETH**
+**2. Bob deposits 5 ETH**
 ```
 idle_buffer = 10 ETH
 shares_bob = (5 * 5) / 5 = 5 shares
@@ -175,49 +175,49 @@ totalAssets = 10 ETH
 
 ✅ AUTO-ALLOCATE (10 >= 10)
   → idle_buffer = 0
-  → Manager recibe 10 ETH
-  → Distribuye: Aave 5 ETH, Compound 5 ETH
-  → totalAssets = 0 (idle) + 10 (estrategias) = 10 ETH
+  → Manager receives 10 ETH
+  → Distributes: Aave 5 ETH, Compound 5 ETH
+  → totalAssets = 0 (idle) + 10 (strategies) = 10 ETH
 ```
 
-**3. Charlie deposita 5 ETH**
+**3. Charlie deposits 5 ETH**
 ```
 idle_buffer = 5 ETH
 shares_charlie = (5 * 10) / 10 = 5 shares
 totalSupply = 15 shares
-totalAssets = 5 (idle) + 10 (estrategias) = 15 ETH
+totalAssets = 5 (idle) + 10 (strategies) = 15 ETH
 
 ❌ NO auto-allocate (5 < 10)
 ```
 
-**Beneficio del Idle Buffer:**
-- Alice y Bob compartieron gas de 1 allocate en lugar de pagar 2 separados
-- Gas cost total: ~300k gas (en lugar de 600k si depositaran directamente)
-- Ahorro: 50% de gas para ambos usuarios
+**Idle Buffer Benefit:**
+- Alice and Bob shared the gas cost of 1 allocate instead of paying for 2 separate ones
+- Total gas cost: ~300k gas (instead of 600k if they deposited directly)
+- Savings: 50% gas for both users
 
 ---
 
-## 2. Flujo de Withdraw
+## 2. Withdraw Flow
 
-### Descripción General
+### General Description
 
-El usuario retira WETH del vault quemando shares. Si hay suficiente WETH en el idle buffer, se retira de ahí (gas-efficient). Si no, el vault solicita fondos al manager, que retira proporcionalmente de todas las estrategias. El vault tolera hasta 20 wei de rounding por redondeo de protocolos externos.
+The user withdraws WETH from the vault by burning shares. If there's enough WETH in the idle buffer, it's withdrawn from there (gas-efficient). If not, the vault requests funds from the manager, which withdraws proportionally from all strategies. The vault tolerates up to 20 wei of rounding due to external protocol rounding.
 
-### Flujo Paso a Paso
+### Step-by-Step Flow
 
 ```
 ┌─────────┐          ┌──────────┐          ┌────────────┐          ┌──────────┐          ┌───────────┐
-│ Usuario │          │  Vault   │          │  Manager   │          │ Strategy │          │ Protocol  │
+│  User   │          │  Vault   │          │  Manager   │          │ Strategy │          │ Protocol  │
 └────┬────┘          └────┬─────┘          └─────┬──────┘          └────┬─────┘          └─────┬─────┘
      │                    │                      │                       │                      │
      │ 1. withdraw(100)   │                      │                       │                      │
      ├───────────────────>│                      │                       │                      │
      │                    │                      │                       │                      │
-     │                    │ 2. Calcula shares    │                       │                      │
+     │                    │ 2. Calculates shares │                       │                      │
      │                    │    previewWithdraw() │                       │                      │
      │                    │                      │                       │                      │
-     │                    │ 3. Verifica allowance│                       │                      │
-     │                    │    (si caller != own)│                       │                      │
+     │                    │ 3. Verifies allowance│                       │                      │
+     │                    │    (if caller != own)│                       │                      │
      │                    │                      │                       │                      │
      │                    │ 4. _burn(shares)     │                       │                      │
      │                    │    [CEI pattern]     │                       │                      │
@@ -243,7 +243,7 @@ El usuario retira WETH del vault quemando shares. Si hay suficiente WETH en el i
      │                    │ 11. transfer(vault)  │                       │                      │
      │                    │<─────────────────────┤                       │                      │
      │                    │                      │                       │                      │
-     │                    │ 12. Verifica rounding│                       │                      │
+     │                    │ 12. Verifies rounding│                       │                      │
      │                    │    (< 20 wei diff)   │                       │                      │
      │                    │                      │                       │                      │
      │                    │ 13. transfer(user)   │                       │                      │
@@ -254,25 +254,25 @@ El usuario retira WETH del vault quemando shares. Si hay suficiente WETH en el i
      │                    │                      │                       │                      │
 ```
 
-### Detalle de Pasos
+### Step Details
 
-**1-2. Solicitud de Retiro y Cálculo de Shares**
+**1-2. Withdrawal Request and Shares Calculation**
 ```solidity
-// Usuario retira 100 WETH
+// User withdraws 100 WETH
 uint256 shares = vault.withdraw(100 ether, msg.sender, msg.sender);
 
-// Calcula shares a quemar (ERC4626 standard, sin withdrawal fee)
+// Calculates shares to burn (ERC4626 standard, no withdrawal fee)
 shares = previewWithdraw(100 ether);
 // shares = convertToShares(100) = (100 * totalSupply) / totalAssets()
 ```
 
-**4. Quema de Shares (CEI Pattern)**
+**4. Share Burning (CEI Pattern)**
 ```solidity
-// CRITICAL: Quema shares ANTES de transferir assets (previene reentrancy)
+// CRITICAL: Burns shares BEFORE transferring assets (prevents reentrancy)
 _burn(owner, shares);
 ```
 
-**5-6. Retiro Estratégico (Idle primero, Estrategias después)**
+**5-6. Strategic Withdrawal (Idle first, Strategies second)**
 ```solidity
 uint256 from_idle = assets.min(idle_buffer);
 uint256 from_strategies = assets - from_idle;
@@ -286,18 +286,18 @@ if (from_strategies > 0) {
 }
 ```
 
-**7-10. Retiro Proporcional de Estrategias**
+**7-10. Proportional Withdrawal from Strategies**
 ```solidity
-// Manager.withdrawTo() retira proporcionalmente para mantener ratios
+// Manager.withdrawTo() withdraws proportionally to maintain ratios
 uint256 total_assets = totalAssets();
 
 for (uint256 i = 0; i < strategies.length; i++) {
     uint256 strategy_balance = strategies[i].totalAssets();
 
-    // Retiro proporcional
+    // Proportional withdrawal
     uint256 to_withdraw = (assets * strategy_balance) / total_assets;
 
-    // Captura monto real retirado (rounding de protocolos)
+    // Capture actual amount withdrawn (protocol rounding)
     uint256 actual_withdrawn = strategy.withdraw(to_withdraw);
     total_withdrawn += actual_withdrawn;
 }
@@ -305,26 +305,26 @@ for (uint256 i = 0; i < strategies.length; i++) {
 IERC20(asset).safeTransfer(receiver, total_withdrawn);
 ```
 
-**12. Verificación de Rounding Tolerance**
+**12. Rounding Tolerance Verification**
 ```solidity
 uint256 to_transfer = assets.min(balance);
 
 if (to_transfer < assets) {
-    // Tolera hasta 20 wei de diferencia (rounding de Aave/Compound)
+    // Tolerates up to 20 wei of difference (Aave/Compound rounding)
     require(assets - to_transfer < 20, "Excessive rounding");
 }
 ```
 
-**13. Transferencia al Usuario**
+**13. Transfer to User**
 ```solidity
 IERC20(asset).safeTransfer(receiver, to_transfer);
 ```
 
-### Ejemplo Numérico Completo
+### Full Numerical Example
 
-**Escenario**: Alice retira 100 WETH. Vault tiene 5 ETH idle, resto en estrategias.
+**Scenario**: Alice withdraws 100 WETH. Vault has 5 ETH idle, rest in strategies.
 
-**Estado inicial:**
+**Initial state:**
 ```
 idle_buffer = 5 ETH
 Aave: 70 ETH
@@ -332,65 +332,65 @@ Compound: 30 ETH
 total_assets = 105 ETH
 ```
 
-**1. Alice llama withdraw(100 ETH)**
+**1. Alice calls withdraw(100 ETH)**
 ```
-Shares de Alice: calcula previewWithdraw(100)
+Alice's shares: calculates previewWithdraw(100)
 ```
 
-**2. Cálculo de shares (ERC4626, sin fee)**
+**2. Shares calculation (ERC4626, no fee)**
 ```
 shares = convertToShares(100)
 ```
 
-**3. Quema shares (CEI pattern)**
+**3. Burns shares (CEI pattern)**
 
-**4. Retiro desde idle buffer**
+**4. Withdrawal from idle buffer**
 ```
 from_idle = min(5, 100) = 5 ETH
 idle_buffer = 0
 ```
 
-**5. Retiro desde manager**
+**5. Withdrawal from manager**
 ```
 from_strategies = 100 - 5 = 95 WETH
 
-Total en estrategias = 70 + 30 = 100 WETH
+Total in strategies = 70 + 30 = 100 WETH
 
-De Aave: (95 * 70) / 100 = 66.5 WETH (real: ~66.499999999999999998 por rounding)
-De Compound: (95 * 30) / 100 = 28.5 WETH (real: ~28.499999999999999999 por rounding)
+From Aave: (95 * 70) / 100 = 66.5 WETH (actual: ~66.499999999999999998 due to rounding)
+From Compound: (95 * 30) / 100 = 28.5 WETH (actual: ~28.499999999999999999 due to rounding)
 ```
 
-**6. Verificación de rounding**
+**6. Rounding verification**
 ```
-to_transfer = min(100, balance_actual)
-Diferencia: 100 - 99.999999999999999997 = 3 wei
-3 < 20 → ✅ Dentro de tolerancia
+to_transfer = min(100, actual_balance)
+Difference: 100 - 99.999999999999999997 = 3 wei
+3 < 20 → ✅ Within tolerance
 ```
 
-**7. Estado final**
+**7. Final state**
 ```
 idle_buffer = 0
 Aave: 70 - 66.5 = 3.5 ETH
 Compound: 30 - 28.5 = 1.5 ETH
 total_assets = 0 + 3.5 + 1.5 = 5 ETH
 
-Alice recibe: ~100 WETH (menos ~3 wei por rounding)
+Alice receives: ~100 WETH (minus ~3 wei due to rounding)
 ```
 
-**Beneficio del Retiro Proporcional:**
-- No requiere recalcular target allocations (ahorro de gas)
-- Mantiene ratios originales entre estrategias
-- Si todas las estrategias tienen liquidez, el retiro siempre funciona
+**Proportional Withdrawal Benefit:**
+- Does not require recalculating target allocations (gas savings)
+- Maintains original ratios between strategies
+- If all strategies have liquidity, the withdrawal always works
 
 ---
 
-## 3. Flujo de Harvest
+## 3. Harvest Flow
 
-### Descripción General
+### General Description
 
-El harvest cosecha rewards (AAVE/COMP tokens) de todas las estrategias, los convierte a WETH via Uniswap V3, los reinvierte automáticamente, y distribuye performance fees. Cualquiera puede ejecutar harvest — keepers externos reciben 1% del profit como incentivo, keepers oficiales no cobran.
+The harvest collects rewards (AAVE/COMP tokens) from all strategies, converts them to WETH via Uniswap V3, auto-reinvests them, and distributes performance fees. Anyone can execute harvest -- external keepers receive 1% of the profit as an incentive, official keepers don't charge.
 
-### Flujo Paso a Paso
+### Step-by-Step Flow
 
 ```
 ┌─────────┐          ┌──────────┐          ┌────────────┐          ┌──────────┐          ┌───────────┐
@@ -442,11 +442,12 @@ El harvest cosecha rewards (AAVE/COMP tokens) de todas las estrategias, los conv
      │                    │ 14. if profit >=     │                       │                      │
      │                    │     0.1 ETH:         │                       │                      │
      │                    │                      │                       │                      │
-     │                    │ 15. Paga keeper      │                       │                      │
+     │                    │ 15. Pays keeper      │                       │                      │
      │<───────────────────┤     incentive (1%)   │                       │                      │
      │                    │                      │                       │                      │
-     │                    │ 16. Calcula perf fee │                       │                      │
-     │                    │     (20% net profit) │                       │                      │
+     │                    │ 16. Calculates perf  │                       │                      │
+     │                    │     fee (20% net     │                       │                      │
+     │                    │     profit)          │                       │                      │
      │                    │                      │                       │                      │
      │                    │ 17. Mint shares      │                       │                      │
      │                    │     → treasury (80%) │                       │                      │
@@ -459,29 +460,29 @@ El harvest cosecha rewards (AAVE/COMP tokens) de todas las estrategias, los conv
      │                    │                      │                       │                      │
 ```
 
-### Detalle de Pasos
+### Step Details
 
-**1. Cualquiera Puede Ejecutar Harvest**
+**1. Anyone Can Execute Harvest**
 ```solidity
-// Keeper externo (recibe 1% incentivo)
+// External keeper (receives 1% incentive)
 vault.harvest();
 
-// Keeper oficial (no recibe incentivo)
+// Official keeper (does not receive incentive)
 vault.harvest();
 
-// No importa quién llame — la diferencia es solo si cobra incentivo
+// It doesn't matter who calls -- the only difference is whether they charge an incentive
 ```
 
-**2-12. Harvest Fail-Safe en StrategyManager**
+**2-12. Fail-Safe Harvest in StrategyManager**
 ```solidity
-// Manager itera todas las estrategias con try-catch
+// Manager iterates all strategies with try-catch
 uint256 total_profit = 0;
 
 for (uint256 i = 0; i < strategies.length; i++) {
     try strategies[i].harvest() returns (uint256 profit) {
         total_profit += profit;
     } catch Error(string memory reason) {
-        // Si una falla, las demás continúan
+        // If one fails, the others continue
         emit HarvestFailed(address(strategies[i]), reason);
     }
 }
@@ -489,18 +490,18 @@ for (uint256 i = 0; i < strategies.length; i++) {
 return total_profit;
 ```
 
-**3-6. AaveStrategy.harvest() (dentro del try)**
+**3-6. AaveStrategy.harvest() (inside the try)**
 ```solidity
-// 1. Claimea rewards AAVE
+// 1. Claims AAVE rewards
 address[] memory assets = new address[](1);
 assets[0] = address(a_token);
 (, uint256[] memory amounts) = rewards_controller.claimAllRewards(assets, address(this));
 
-// 2. Si no hay rewards → return 0
+// 2. If no rewards → return 0
 uint256 claimed = amounts[0];
 if (claimed == 0) return 0;
 
-// 3. Calcula slippage protection
+// 3. Calculate slippage protection
 uint256 min_amount_out = (claimed * 9900) / 10000;  // 1% max slippage
 
 // 4. Swap AAVE → WETH via Uniswap V3
@@ -516,62 +517,62 @@ uint256 amount_out = uniswap_router.exactInputSingle(
     })
 );
 
-// 5. Auto-compound: re-supply WETH a Aave
+// 5. Auto-compound: re-supply WETH to Aave
 aave_pool.supply(asset_address, amount_out, address(this), 0);
 
 return amount_out;  // profit
 ```
 
-**14-18. Distribución de Fees en Vault**
+**14-18. Fee Distribution in Vault**
 ```solidity
-// Verifica profit mínimo
+// Verify minimum profit
 if (profit < min_profit_for_harvest) return 0;  // 0.1 ETH
 
-// Paga keeper externo (solo si no es oficial)
+// Pay external keeper (only if not official)
 uint256 keeper_reward = 0;
 if (!is_official_keeper[msg.sender]) {
     keeper_reward = (profit * keeper_incentive) / BASIS_POINTS;  // 1%
     IERC20(asset).safeTransfer(msg.sender, keeper_reward);
 }
 
-// Calcula performance fee sobre net profit
+// Calculate performance fee on net profit
 uint256 net_profit = profit - keeper_reward;
 uint256 perf_fee = (net_profit * performance_fee) / BASIS_POINTS;  // 20%
 
-// Distribuye:
-// Treasury (80% perf fee) → mintea shares (auto-compound)
+// Distribute:
+// Treasury (80% perf fee) → mints shares (auto-compound)
 uint256 treasury_amount = (perf_fee * treasury_split) / BASIS_POINTS;
 uint256 treasury_shares = convertToShares(treasury_amount);
 _mint(treasury_address, treasury_shares);
 
-// Founder (20% perf fee) → transfiere WETH (liquid)
+// Founder (20% perf fee) → transfers WETH (liquid)
 uint256 founder_amount = (perf_fee * founder_split) / BASIS_POINTS;
 IERC20(asset).safeTransfer(founder_address, founder_amount);
 ```
 
-### Ejemplo Numérico Completo
+### Full Numerical Example
 
-**Escenario**: Keeper externo ejecuta harvest después de 1 mes de acumulación.
+**Scenario**: External keeper executes harvest after 1 month of accumulation.
 
-**Estado inicial:**
+**Initial state:**
 ```
 TVL = 500 WETH
-Aave: 250 WETH + rewards AAVE acumulados
-Compound: 250 WETH + rewards COMP acumulados
+Aave: 250 WETH + accumulated AAVE rewards
+Compound: 250 WETH + accumulated COMP rewards
 idle_buffer = 2 ETH
 ```
 
 **1. StrategyManager.harvest() (fail-safe)**
 ```
 AaveStrategy.harvest():
-  - Claimea: 50 AAVE tokens
+  - Claims: 50 AAVE tokens
   - Swap: 50 AAVE → 2.5 WETH (Uniswap V3, 0.3% fee)
   - Min amount out: 50 * 9900 / 10000 = 49.5 AAVE equiv (1% slippage)
   - Re-supply: 2.5 WETH → Aave Pool
   - profit_aave = 2.5 WETH
 
 CompoundStrategy.harvest():
-  - Claimea: 100 COMP tokens
+  - Claims: 100 COMP tokens
   - Swap: 100 COMP → 3.0 WETH (Uniswap V3, 0.3% fee)
   - Re-supply: 3.0 WETH → Compound Comet
   - profit_compound = 3.0 WETH
@@ -579,18 +580,18 @@ CompoundStrategy.harvest():
 total_profit = 2.5 + 3.0 = 5.5 WETH
 ```
 
-**2. Verificación de threshold**
+**2. Threshold verification**
 ```
 5.5 WETH >= 0.1 ETH (min_profit_for_harvest)
-✅ Continúa con distribución
+✅ Continues with distribution
 ```
 
-**3. Pago a keeper externo**
+**3. Payment to external keeper**
 ```
 keeper_reward = 5.5 * 100 / 10000 = 0.055 WETH
-→ Paga desde idle_buffer (2 ETH disponible, solo necesita 0.055)
+→ Pays from idle_buffer (2 ETH available, only needs 0.055)
 → idle_buffer = 2 - 0.055 = 1.945 ETH
-→ Transfiere 0.055 WETH al keeper
+→ Transfers 0.055 WETH to the keeper
 ```
 
 **4. Performance fee**
@@ -599,48 +600,48 @@ net_profit = 5.5 - 0.055 = 5.445 WETH
 perf_fee = 5.445 * 2000 / 10000 = 1.089 WETH
 ```
 
-**5. Distribución de performance fee**
+**5. Performance fee distribution**
 ```
 treasury_amount = 1.089 * 8000 / 10000 = 0.8712 WETH
-→ Mintea shares equivalentes a 0.8712 WETH al treasury_address
-→ Shares auto-compound (suben de valor con cada harvest futuro)
+→ Mints shares equivalent to 0.8712 WETH to treasury_address
+→ Shares auto-compound (increase in value with each future harvest)
 
 founder_amount = 1.089 * 2000 / 10000 = 0.2178 WETH
-→ Retira de idle_buffer: 1.945 - 0.2178 = 1.7272 ETH restante
-→ Transfiere 0.2178 WETH al founder_address
+→ Withdraws from idle_buffer: 1.945 - 0.2178 = 1.7272 ETH remaining
+→ Transfers 0.2178 WETH to founder_address
 ```
 
-**6. Estado final**
+**6. Final state**
 ```
-TVL = 500 + 5.5 (rewards reinvertidos) = 505.5 WETH
+TVL = 500 + 5.5 (reinvested rewards) = 505.5 WETH
 idle_buffer = 1.7272 ETH
 Aave: 252.5 WETH
 Compound: 253.0 WETH
 
-Keeper recibió: 0.055 WETH
-Treasury recibió: shares por 0.8712 WETH
-Founder recibió: 0.2178 WETH
-Usuarios se benefician: yield compuesto en estrategias
+Keeper received: 0.055 WETH
+Treasury received: shares for 0.8712 WETH
+Founder received: 0.2178 WETH
+Users benefit: compounded yield in strategies
 ```
 
-**Si el caller fuera keeper oficial:**
+**If the caller were an official keeper:**
 ```
-keeper_reward = 0 (oficial, no cobra)
-net_profit = 5.5 WETH (sin descuento)
+keeper_reward = 0 (official, doesn't charge)
+net_profit = 5.5 WETH (no discount)
 perf_fee = 5.5 * 2000 / 10000 = 1.1 WETH
-treasury_amount = 0.88 WETH (más para el protocolo)
-founder_amount = 0.22 WETH (más para el founder)
+treasury_amount = 0.88 WETH (more for the protocol)
+founder_amount = 0.22 WETH (more for the founder)
 ```
 
 ---
 
-## 4. Flujo de Rebalance
+## 4. Rebalance Flow
 
-### Descripción General
+### General Description
 
-Cuando los APYs cambian, la distribución óptima cambia. Un keeper (bot o usuario) puede ejecutar rebalance() para mover fondos entre estrategias. El rebalance solo se ejecuta si la diferencia de APY entre la mejor y peor estrategia supera el threshold del 2%.
+When APYs change, the optimal distribution changes. A keeper (bot or user) can execute rebalance() to move funds between strategies. The rebalance only executes if the APY difference between the best and worst strategy exceeds the 2% threshold.
 
-### Flujo Paso a Paso
+### Step-by-Step Flow
 
 ```
 ┌─────────┐          ┌────────────┐          ┌──────────┐          ┌───────────┐
@@ -650,7 +651,7 @@ Cuando los APYs cambian, la distribución óptima cambia. Un keeper (bot o usuar
      │ 1. shouldRebalance()│                       │                      │
      ├────────────────────>│                       │                      │
      │                     │                       │                      │
-     │                     │ 2. Verifica:          │                      │
+     │                     │ 2. Verifies:          │                      │
      │                     │    - >= 2 strategies   │                      │
      │                     │    - TVL >= 10 ETH    │                      │
      │                     │    - max_apy - min_apy│                      │
@@ -662,9 +663,10 @@ Cuando los APYs cambian, la distribución óptima cambia. Un keeper (bot o usuar
      ├────────────────────>│                       │                      │
      │                     │                       │                      │
      │                     │ 5. shouldRebalance()  │                      │
-     │                     │    [revierte si false]│                      │
+     │                     │    [reverts if false] │                      │
      │                     │                       │                      │
-     │                     │ 6. Recalcula targets  │                      │
+     │                     │ 6. Recalculates       │                      │
+     │                     │    targets             │                      │
      │                     │    _calculateTargets()│                      │
      │                     │                       │                      │
      │                     │ 7. for excess strats: │                      │
@@ -690,11 +692,11 @@ Cuando los APYs cambian, la distribución óptima cambia. Un keeper (bot o usuar
      │                     │                       │                      │
 ```
 
-### Detalle de Pasos
+### Step Details
 
-**1. Verificación de Rentabilidad**
+**1. Profitability Check**
 ```solidity
-// Keeper llama view function primero (off-chain check)
+// Keeper calls view function first (off-chain check)
 bool should = manager.shouldRebalance();
 
 if (should) {
@@ -702,15 +704,15 @@ if (should) {
 }
 ```
 
-**2. Lógica de shouldRebalance()**
+**2. shouldRebalance() Logic**
 ```solidity
-// Requiere >= 2 estrategias
+// Requires >= 2 strategies
 if (strategies.length < 2) return false;
 
-// Requiere TVL mínimo
+// Requires minimum TVL
 if (totalAssets() < min_tvl_for_rebalance) return false;  // 10 ETH
 
-// Calcula diferencia de APY
+// Calculate APY difference
 uint256 max_apy = 0;
 uint256 min_apy = type(uint256).max;
 
@@ -720,40 +722,40 @@ for (uint256 i = 0; i < strategies.length; i++) {
     if (apy < min_apy) min_apy = apy;
 }
 
-// Rebalance si diferencia >= 2% (200 bp)
+// Rebalance if difference >= 2% (200 bp)
 return (max_apy - min_apy) >= rebalance_threshold;
 ```
 
-### Ejemplo Numérico Completo
+### Full Numerical Example
 
-**Escenario**: APY de Compound sube de 5% a 8%, rebalance se vuelve rentable.
+**Scenario**: Compound APY rises from 5% to 8%, rebalance becomes profitable.
 
-**Estado inicial (targets 50/50):**
+**Initial state (50/50 targets):**
 ```
 Aave: 50 WETH (5% APY = 500 bp)
 Compound: 50 WETH (5% APY = 500 bp)
 total_tvl = 100 WETH
 ```
 
-**Cambio de mercado:**
+**Market change:**
 ```
-Aave: 5% APY (sin cambios, 500 bp)
-Compound: 8% APY (subió 3%, 800 bp)
+Aave: 5% APY (no change, 500 bp)
+Compound: 8% APY (rose 3%, 800 bp)
 ```
 
-**1. Keeper llama shouldRebalance()**
+**1. Keeper calls shouldRebalance()**
 ```
 max_apy = 800 bp (Compound)
 min_apy = 500 bp (Aave)
-diferencia = 800 - 500 = 300 bp
+difference = 800 - 500 = 300 bp
 
 300 >= 200 (rebalance_threshold)
 ✅ shouldRebalance = true
 ```
 
-**2. Keeper ejecuta rebalance()**
+**2. Keeper executes rebalance()**
 ```
-Recalcula targets:
+Recalculates targets:
 - total_apy = 500 + 800 = 1300 bp
 - Aave: (500 * 10000) / 1300 = 3846 bp = 38.46%
 - Compound: (800 * 10000) / 1300 = 6154 bp = 61.54%
@@ -763,68 +765,68 @@ Target balances:
 - Compound: 100 * 61.54% = 61.54 WETH
 
 Deltas:
-- Aave: 50 - 38.46 = +11.54 WETH (exceso)
-- Compound: 50 - 61.54 = -11.54 WETH (necesita)
+- Aave: 50 - 38.46 = +11.54 WETH (excess)
+- Compound: 50 - 61.54 = -11.54 WETH (needs more)
 ```
 
-**3. Ejecución del rebalance**
+**3. Rebalance execution**
 ```
-Movimiento:
-1. Retira 11.54 WETH de Aave (aave_pool.withdraw)
-2. Transfiere 11.54 WETH a CompoundStrategy
-3. Deposita 11.54 WETH en Compound (compound_comet.supply)
+Movement:
+1. Withdraws 11.54 WETH from Aave (aave_pool.withdraw)
+2. Transfers 11.54 WETH to CompoundStrategy
+3. Deposits 11.54 WETH into Compound (compound_comet.supply)
 
-Estado final:
+Final state:
 - Aave: 38.46 WETH (38.46%)
 - Compound: 61.54 WETH (61.54%)
-- Los fondos ahora generan más yield al estar mejor distribuidos
+- Funds now generate more yield by being better distributed
 ```
 
-**Escenario donde no se rebalancea:**
+**Scenario where rebalance does not happen:**
 ```
 Aave: 4% APY (400 bp)
 Compound: 5% APY (500 bp)
-diferencia = 500 - 400 = 100 bp
+difference = 500 - 400 = 100 bp
 
 100 < 200 (rebalance_threshold)
-❌ shouldRebalance = false → No vale la pena mover fondos
+❌ shouldRebalance = false → Not worth moving funds
 ```
 
 ---
 
-## 5. Flujo de Idle Buffer Allocation
+## 5. Idle Buffer Allocation Flow
 
-### Descripción General
+### General Description
 
-El idle buffer acumula depósitos pequeños para ahorrar gas. Múltiples usuarios comparten el coste de un solo allocate.
+The idle buffer accumulates small deposits to save gas. Multiple users share the cost of a single allocate.
 
-### Ejemplo de 3 Usuarios
+### 3-User Example
 
-**Configuración:**
+**Configuration:**
 - `idle_threshold = 10 ETH`
-- `idle_buffer = 0` inicial
+- `idle_buffer = 0` initial
 
-**Usuario 1: Alice deposita 5 ETH**
+**User 1: Alice deposits 5 ETH**
 ```
-Estado antes:
+State before:
   idle_buffer = 0
 
 Alice.deposit(5 ETH)
   → idle_buffer = 5 ETH
   → shares_alice = 5
-  → totalAssets = 5 ETH (todo en idle)
+  → totalAssets = 5 ETH (all in idle)
 
 Check: idle_buffer (5) < threshold (10)
 ❌ NO auto-allocate
 
-Estado después:
-  idle_buffer = 5 ETH (acumulando)
+State after:
+  idle_buffer = 5 ETH (accumulating)
   totalAssets = 5 ETH
 ```
 
-**Usuario 2: Bob deposita 5 ETH**
+**User 2: Bob deposits 5 ETH**
 ```
-Estado antes:
+State before:
   idle_buffer = 5 ETH
 
 Bob.deposit(5 ETH)
@@ -838,21 +840,21 @@ Check: idle_buffer (10) >= threshold (10)
 _allocateIdle():
   1. to_allocate = 10 ETH
   2. idle_buffer = 0
-  3. Transfer 10 ETH al manager
+  3. Transfer 10 ETH to manager
   4. manager.allocate(10 ETH)
-     → Aave recibe 5 ETH
-     → Compound recibe 5 ETH
+     → Aave receives 5 ETH
+     → Compound receives 5 ETH
 
-Estado después:
+State after:
   idle_buffer = 0
   Aave: 5 ETH
   Compound: 5 ETH
   totalAssets = 0 + 5 + 5 = 10 ETH
 ```
 
-**Usuario 3: Charlie deposita 5 ETH**
+**User 3: Charlie deposits 5 ETH**
 ```
-Estado antes:
+State before:
   idle_buffer = 0
   Aave: 5 ETH
   Compound: 5 ETH
@@ -863,18 +865,18 @@ Charlie.deposit(5 ETH)
   → totalAssets = 5 + 5 + 5 = 15 ETH
 
 Check: idle_buffer (5) < threshold (10)
-❌ NO auto-allocate (ciclo se repite)
+❌ NO auto-allocate (cycle repeats)
 
-Estado después:
-  idle_buffer = 5 ETH (acumulando de nuevo)
+State after:
+  idle_buffer = 5 ETH (accumulating again)
   Aave: 5 ETH
   Compound: 5 ETH
   totalAssets = 15 ETH
 ```
 
-### Análisis de Gas
+### Gas Analysis
 
-**Sin idle buffer (3 allocates separados):**
+**Without idle buffer (3 separate allocates):**
 ```
 Alice: 300k gas * 50 gwei = 0.015 ETH
 Bob: 300k gas * 50 gwei = 0.015 ETH
@@ -884,43 +886,43 @@ Total gas: 900k
 Total cost: 0.045 ETH
 ```
 
-**Con idle buffer (1 allocate compartido para Alice + Bob):**
+**With idle buffer (1 shared allocate for Alice + Bob):**
 ```
 Alice: 0 ETH (no allocate)
-Bob: 300k gas * 50 gwei = 0.015 ETH (trigger allocate por Alice + Bob)
-Charlie: 0 ETH (no allocate aún)
+Bob: 300k gas * 50 gwei = 0.015 ETH (triggers allocate for Alice + Bob)
+Charlie: 0 ETH (no allocate yet)
 
 Total gas: 300k
 Total cost: 0.015 ETH
 
-Ahorro: 0.045 - 0.015 = 0.03 ETH (66% ahorro)
-Cost por usuario: 0.015 / 2 = 0.0075 ETH
+Savings: 0.045 - 0.015 = 0.03 ETH (66% savings)
+Cost per user: 0.015 / 2 = 0.0075 ETH
 ```
 
-### Flujo Manual de Allocate
+### Manual Allocate Flow
 
-**Cualquiera puede llamar allocateIdle() si idle >= threshold:**
+**Anyone can call allocateIdle() if idle >= threshold:**
 ```solidity
-// Keeper ve que idle_buffer = 10 ETH
+// Keeper sees that idle_buffer = 10 ETH
 vault.allocateIdle();
 
-// Vault ejecuta:
+// Vault executes:
 if (idle_buffer < idle_threshold) revert Vault__InsufficientIdleBuffer();
 _allocateIdle();
 ```
 
 ---
 
-## Resumen de Flujos
+## Flow Summary
 
-| Flujo | Trigger | Auto/Manual | Gas Optimization | Fee |
-|-------|---------|-------------|------------------|-----|
-| **Deposit** | Usuario deposita | Auto si idle >= 10 ETH | Idle buffer (ahorro 50-66%) | Ninguna |
-| **Withdraw** | Usuario retira | Manual (usuario llama) | Retira de idle primero | Ninguna (solo rounding ~wei) |
-| **Harvest** | Keeper/Cualquiera | Manual (incentivizado) | Fail-safe, auto-compound | 20% perf fee + 1% keeper |
-| **Rebalance** | APY cambia > 2% | Manual (keeper/cualquiera) | Solo si APY diff >= threshold | Ninguna |
-| **Idle Allocate** | idle >= threshold | Auto en deposit, o manual | Amortiza gas entre usuarios | Ninguna |
+| Flow | Trigger | Auto/Manual | Gas Optimization | Fee |
+|------|---------|-------------|------------------|-----|
+| **Deposit** | User deposits | Auto if idle >= 10 ETH | Idle buffer (50-66% savings) | None |
+| **Withdraw** | User withdraws | Manual (user calls) | Withdraws from idle first | None (only rounding ~wei) |
+| **Harvest** | Keeper/Anyone | Manual (incentivized) | Fail-safe, auto-compound | 20% perf fee + 1% keeper |
+| **Rebalance** | APY changes > 2% | Manual (keeper/anyone) | Only if APY diff >= threshold | None |
+| **Idle Allocate** | idle >= threshold | Auto on deposit, or manual | Amortizes gas across users | None |
 
 ---
 
-**Siguiente lectura**: [SECURITY.md](SECURITY.md) - Consideraciones de seguridad y protecciones implementadas
+**Next reading**: [SECURITY.md](SECURITY.md) - Security considerations and implemented protections

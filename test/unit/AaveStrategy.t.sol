@@ -9,17 +9,17 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 /**
  * @title AaveStrategyTest
  * @author cristianrisueo
- * @notice Tests unitarios para AaveStrategy con fork de Mainnet
- * @dev Fork test real contra Aave v3 - valida deposits, withdrawals y APY
+ * @notice Unit tests for AaveStrategy with Mainnet fork
+ * @dev Real fork test against Aave v3 - validates deposits, withdrawals and APY
  */
 contract AaveStrategyTest is Test {
-    //* Variables de estado
+    //* State variables
 
-    /// @notice Instancia de la estrategia y manager
+    /// @notice Instance of the strategy and manager
     AaveStrategy public strategy;
     StrategyManager public manager;
 
-    /// @notice Direcciones de los contratos en Mainnet
+    /// @notice Contract addresses on Mainnet
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address constant AAVE_REWARDS = 0x8164Cc65827dcFe994AB23944CBC90e0aa80bFcb;
@@ -27,68 +27,68 @@ contract AaveStrategyTest is Test {
     address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
     uint24 constant POOL_FEE = 3000;
 
-    /// @notice Usuario de prueba
+    /// @notice Test user
     address public alice = makeAddr("alice");
 
-    //* Setup del entorno de testing
+    //* Testing environment setup
 
     /**
-     * @notice Configura el entorno de testing
-     * @dev Fork de Mainnet para interactuar con Aave v3 real
+     * @notice Configures the testing environment
+     * @dev Mainnet fork to interact with real Aave v3
      */
     function setUp() public {
-        // Crea un fork de Mainnet usando el endpoint de Alchemy
+        // Create a Mainnet fork using the Alchemy endpoint
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Inicializa manager (necesario para la estrategia)
+        // Initialize manager (needed for the strategy)
         manager = new StrategyManager(WETH);
 
-        // Inicializa la estrategia
+        // Initialize the strategy
         strategy = new AaveStrategy(address(manager), AAVE_POOL, AAVE_REWARDS, WETH, AAVE_TOKEN, UNISWAP_ROUTER, POOL_FEE);
     }
 
-    //* Funciones internas helpers
+    //* Internal helper functions
 
     /**
-     * @notice Helper para depositar en la estrategia como manager
-     * @param amount Cantidad a depositar
+     * @notice Helper to deposit into the strategy as manager
+     * @param amount Amount to deposit
      */
     function _deposit(uint256 amount) internal {
-        // Da WETH a la estrategia y deposita como manager
+        // Give WETH to the strategy and deposit as manager
         deal(WETH, address(strategy), amount);
         vm.prank(address(manager));
         strategy.deposit(amount);
     }
 
     /**
-     * @notice Helper para retirar de la estrategia como manager
-     * @param amount Cantidad a retirar
+     * @notice Helper to withdraw from the strategy as manager
+     * @param amount Amount to withdraw
      */
     function _withdraw(uint256 amount) internal {
         vm.prank(address(manager));
         strategy.withdraw(amount);
     }
 
-    //* Testing de deposit
+    //* Deposit testing
 
     /**
-     * @notice Test de depósito básico en Aave
-     * @dev Comprueba que el depósito se realice correctamente
+     * @notice Basic deposit into Aave test
+     * @dev Checks that the deposit is executed correctly
      */
     function test_Deposit_Basic() public {
-        // Deposita en Aave
+        // Deposit into Aave
         _deposit(10 ether);
 
-        // Comprueba que totalAssets refleje el depósito
+        // Check that totalAssets reflects the deposit
         assertApproxEqRel(strategy.totalAssets(), 10 ether, 0.001e18);
 
-        // Comprueba que aTokenBalance coincida
+        // Check that aTokenBalance matches
         assertEq(strategy.totalAssets(), strategy.aTokenBalance());
     }
 
     /**
-     * @notice Test de depósito solo desde manager
-     * @dev Comprueba que solo el manager pueda depositar
+     * @notice Deposit only from manager test
+     * @dev Checks that only the manager can deposit
      */
     function test_Deposit_RevertIfNotManager() public {
         deal(WETH, address(strategy), 10 ether);
@@ -98,45 +98,45 @@ contract AaveStrategyTest is Test {
         strategy.deposit(10 ether);
     }
 
-    //* Testing de withdraw
+    //* Withdraw testing
 
     /**
-     * @notice Test de retiro básico de Aave
-     * @dev Comprueba que el retiro se realice correctamente
+     * @notice Basic withdrawal from Aave test
+     * @dev Checks that the withdrawal is executed correctly
      */
     function test_Withdraw_Basic() public {
-        // Deposita primero
+        // Deposit first
         _deposit(10 ether);
 
-        // Retira la mitad
+        // Withdraw half
         _withdraw(5 ether);
 
-        // Comprueba que el manager recibió los fondos
+        // Check that the manager received the funds
         assertEq(IERC20(WETH).balanceOf(address(manager)), 5 ether);
 
-        // Comprueba que queda aproximadamente la mitad
+        // Check that approximately half remains
         assertApproxEqRel(strategy.totalAssets(), 5 ether, 0.001e18);
     }
 
     /**
-     * @notice Test de retiro total de Aave
-     * @dev Comprueba que se pueda retirar todo
+     * @notice Full withdrawal from Aave test
+     * @dev Checks that everything can be withdrawn
      */
     function test_Withdraw_Full() public {
-        // Deposita
+        // Deposit
         _deposit(10 ether);
 
-        // Retira todo
+        // Withdraw everything
         uint256 balance = strategy.totalAssets();
         _withdraw(balance);
 
-        // Comprueba que el balance sea 0
+        // Check that the balance is 0
         assertEq(strategy.totalAssets(), 0);
     }
 
     /**
-     * @notice Test de retiro solo desde manager
-     * @dev Comprueba que solo el manager pueda retirar
+     * @notice Withdrawal only from manager test
+     * @dev Checks that only the manager can withdraw
      */
     function test_Withdraw_RevertIfNotManager() public {
         _deposit(10 ether);
@@ -146,49 +146,49 @@ contract AaveStrategyTest is Test {
         strategy.withdraw(5 ether);
     }
 
-    //* Testing de funciones de consulta
+    //* Query function testing
 
     /**
-     * @notice Test de APY
-     * @dev Comprueba que el APY sea un valor razonable
+     * @notice APY test
+     * @dev Checks that the APY is a reasonable value
      */
     function test_Apy_ReturnsValidValue() public view {
         uint256 apy = strategy.apy();
 
-        // El APY debería estar entre 0% y 50% (0 - 5000 bp)
+        // The APY should be between 0% and 50% (0 - 5000 bp)
         assertLt(apy, 5000);
     }
 
     /**
-     * @notice Test de nombre de la estrategia
-     * @dev Comprueba que devuelva el nombre correcto
+     * @notice Strategy name test
+     * @dev Checks that it returns the correct name
      */
     function test_Name() public view {
         assertEq(strategy.name(), "Aave v3 Strategy");
     }
 
     /**
-     * @notice Test de asset
-     * @dev Comprueba que devuelva la dirección de WETH
+     * @notice Asset test
+     * @dev Checks that it returns the WETH address
      */
     function test_Asset() public view {
         assertEq(strategy.asset(), WETH);
     }
 
     /**
-     * @notice Test de liquidez disponible
-     * @dev Comprueba que availableLiquidity devuelva un valor
+     * @notice Available liquidity test
+     * @dev Checks that availableLiquidity returns a value
      */
     function test_AvailableLiquidity() public view {
         uint256 liquidity = strategy.availableLiquidity();
 
-        // Aave mainnet debería tener liquidez significativa
+        // Aave mainnet should have significant liquidity
         assertGt(liquidity, 0);
     }
 
     /**
-     * @notice Test de totalAssets sin depósitos
-     * @dev Comprueba que devuelva 0 sin depósitos
+     * @notice totalAssets without deposits test
+     * @dev Checks that it returns 0 without deposits
      */
     function test_TotalAssets_ZeroWithoutDeposits() public view {
         assertEq(strategy.totalAssets(), 0);

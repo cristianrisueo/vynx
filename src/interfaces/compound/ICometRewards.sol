@@ -3,15 +3,15 @@ pragma solidity 0.8.33;
 
 /**
  * @title ICometRewards
- * @notice Interfaz del contrato de rewards de Compound v3
- * @dev En la librería oficial de cometMarket y cometRewards son dos contratos diferentes, por
- *      lo que esta implementación de cometRewards se tiene que hacer en una interfaz separada
+ * @notice Interface of the Compound v3 rewards contract
+ * @dev In Compound's official library, cometMarket and cometRewards are two different contracts, so
+ *      this cometRewards implementation has to be done in a separate interface
  */
 interface ICometRewards {
     /**
-     * @notice Estructura que representa los rewards pendientes de un usuario
-     * @param token Dirección del token de reward (generalmente COMP)
-     * @param owed Cantidad de tokens pendientes de reclamar
+     * @notice Structure representing a user's pending rewards
+     * @param token Address of the reward token (generally COMP)
+     * @param owed Amount of tokens pending to be claimed
      */
     struct RewardOwed {
         address token;
@@ -19,18 +19,18 @@ interface ICometRewards {
     }
 
     /**
-     * @notice Reclama los rewards pendientes
-     * @param comet Dirección del contrato comet market
-     * @param src Dirección del usuario (en nuestro caso siempre será el mismo, la estrategia)
-     * @param shouldAccrue Si debe acumular más antes antes de claim (accounting interno de compound)
+     * @notice Claims pending rewards
+     * @param comet Address of the comet market contract
+     * @param src Address of the user (in our case it will always be the same, the strategy)
+     * @param shouldAccrue Whether it should accrue more before claiming (Compound's internal accounting)
      */
     function claim(address comet, address src, bool shouldAccrue) external;
 
     /**
-     * @notice Ver rewards pendientes
-     * @param comet Dirección del contrato comet market
-     * @param account Dirección del usuario (en nuestro caso siempre será el mismo, la estrategia)
-     * @return RewardOwed struct con el token de compound y la cantidad a recibir
+     * @notice View pending rewards
+     * @param comet Address of the comet market contract
+     * @param account Address of the user (in our case it will always be the same, the strategy)
+     * @return RewardOwed struct with the Compound token and the amount to receive
      */
     function getRewardOwed(address comet, address account) external view returns (RewardOwed memory);
 }

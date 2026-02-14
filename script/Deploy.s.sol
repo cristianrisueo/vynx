@@ -10,28 +10,28 @@ import {CompoundStrategy} from "../src/strategies/CompoundStrategy.sol";
 /**
  * @title Deploy
  * @author cristianrisueo
- * @notice Script de despliegue del protocolo VynX V1 en Ethereum Mainnet
- * @dev Despliega los 4 contratos y resuelve la dependencia circular entre vault y manager
- *      El deployer (msg.sender) queda como owner de vault, manager, y como treasury/founder
+ * @notice Deployment script for VynX V1 protocol on Ethereum Mainnet
+ * @dev Deploys the 4 contracts and resolves the circular dependency between vault and manager
+ *      The deployer (msg.sender) remains as owner of vault, manager, and as treasury/founder
  *
- * Secuencia de despliegue:
- *   1. StrategyManager   — necesita address mainnet de WETH
- *   2. AaveStrategy      — necesita address mainnet de manager, WETH, Aave Pool
- *   3. CompoundStrategy  — necesita address mainnet de manager, WETH, Compound Comet
- *   4. Vault             — necesita address mainnet de: WETH, manager, treasury, founder
- *   5. manager.initialize(vault)        — resuelve dependencia circular
- *   6. manager.addStrategy(aave)        — registra Aave
- *   7. manager.addStrategy(compound)    — registra Compound
- *   8. vault.setOfficialKeeper(deployer, true) — configura keeper oficial
+ * Deployment sequence:
+ *   1. StrategyManager   — needs mainnet address of WETH
+ *   2. AaveStrategy      — needs mainnet address of manager, WETH, Aave Pool
+ *   3. CompoundStrategy  — needs mainnet address of manager, WETH, Compound Comet
+ *   4. Vault             — needs mainnet address of: WETH, manager, treasury, founder
+ *   5. manager.initialize(vault)        — resolves circular dependency
+ *   6. manager.addStrategy(aave)        — registers Aave
+ *   7. manager.addStrategy(compound)    — registers Compound
+ *   8. vault.setOfficialKeeper(deployer, true) — configures official keeper
  *
- * Uso:
+ * Usage:
  *   forge script script/Deploy.s.sol --rpc-url $MAINNET_RPC_URL --broadcast --verify
  *
- *   Dry-run (sin broadcast, prueba real de que todo ok pero no te cobran):
+ *   Dry-run (no broadcast, real test that everything works but you don't get charged):
  *   forge script script/Deploy.s.sol --rpc-url $MAINNET_RPC_URL -vvv
  */
 contract Deploy is Script {
-    //* Direcciones de Mainnet
+    //* Mainnet Addresses
 
     /// @notice WETH (Wrapped Ether)
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
@@ -48,72 +48,72 @@ contract Deploy is Script {
     /// @notice Compound v3 CometRewards
     address constant COMPOUND_REWARDS = 0x1B0e765F6224C21223AeA2af16c1C46E38885a40;
 
-    /// @notice Token AAVE (reward de Aave v3)
+    /// @notice AAVE token (Aave v3 reward)
     address constant AAVE_TOKEN = 0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9;
 
-    /// @notice Token COMP (reward de Compound v3)
+    /// @notice COMP token (Compound v3 reward)
     address constant COMP_TOKEN = 0xc00e94Cb662C3520282E6f5717214004A7f26888;
 
     /// @notice Uniswap V3 SwapRouter
     address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
 
-    /// @notice Fee tier del pool Uniswap V3 (3000 = 0.3%)
+    /// @notice Uniswap V3 pool fee tier (3000 = 0.3%)
     uint24 constant POOL_FEE = 3000;
 
     //* Entry point
 
     /**
-     * @notice Despliega el protocolo completo
-     * @dev El deployer (quien firma la transacción) se asigna como owner del protocolo, treasury y founder
-     *      Tras el despliegue, el owner puede cambiar treasury via setTreasury() y founder via setFounder()
+     * @notice Deploys the complete protocol
+     * @dev The deployer (transaction signer) is assigned as protocol owner, treasury and founder
+     *      After deployment, the owner can change treasury via setTreasury() and founder via setFounder()
      */
     function run() external {
-        // Obtiene la private key del deployer desde la variable de entorno y el address asociada a esta
+        // Gets the deployer's private key from the environment variable and the address associated with it
         uint256 deployer_pk = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployer_pk);
 
-        // Logs de inicio de deploy en Mainnet
+        // Deploy start logs on Mainnet
         console.log("=== VynX V1 Deploy ===");
         console.log("Deployer:", deployer);
-        console.log("Red: Ethereum Mainnet");
+        console.log("Network: Ethereum Mainnet");
 
-        // Comienza el broadcast a mainnet
+        // Starts the broadcast to mainnet
         vm.startBroadcast(deployer_pk);
 
-        // 1. StrategyManager: cerebro de allocation, sin address del vault todavia
+        // 1. StrategyManager: allocation brain, without vault address yet
         StrategyManager manager = new StrategyManager(WETH);
         console.log("StrategyManager:", address(manager));
 
-        // 2. AaveStrategy: deposita WETH en Aave v3 Pool, cosecha rewards via Uniswap V3
+        // 2. AaveStrategy: deposits WETH into Aave v3 Pool, harvests rewards via Uniswap V3
         AaveStrategy aave_strategy =
             new AaveStrategy(address(manager), AAVE_POOL, AAVE_REWARDS, WETH, AAVE_TOKEN, UNISWAP_ROUTER, POOL_FEE);
         console.log("AaveStrategy:", address(aave_strategy));
 
-        // 3. CompoundStrategy: deposita WETH en Compound v3 Comet, cosecha rewards via Uniswap V3
+        // 3. CompoundStrategy: deposits WETH into Compound v3 Comet, harvests rewards via Uniswap V3
         CompoundStrategy compound_strategy = new CompoundStrategy(
             address(manager), COMPOUND_COMET, COMPOUND_REWARDS, WETH, COMP_TOKEN, UNISWAP_ROUTER, POOL_FEE
         );
         console.log("CompoundStrategy:", address(compound_strategy));
 
-        // 4. Vault: vault ERC4626, deployer como treasury y founder inicialmente
+        // 4. Vault: ERC4626 vault, deployer as treasury and founder initially
         Vault vault = new Vault(WETH, address(manager), deployer, deployer);
         console.log("Vault:", address(vault));
 
-        // 5. Resuelve dependencia circular: Manager ahora tiene el address del vault como "owner/invoker"
+        // 5. Resolves circular dependency: Manager now has the vault address as "owner/invoker"
         manager.initialize(address(vault));
-        console.log("Vault inicializado en manager");
+        console.log("Vault initialized in manager");
 
-        // 6. Añade las estrategias al manager
+        // 6. Adds strategies to the manager
         manager.addStrategy(address(aave_strategy));
         manager.addStrategy(address(compound_strategy));
-        console.log("Estrategias registradas: Aave + Compound");
+        console.log("Strategies registered: Aave + Compound");
 
-        // 8. Configura al deployer como keeper oficial (address que llama al harvest sin cobrar fee)
+        // 8. Configures the deployer as official keeper (address that calls harvest without charging a fee)
         vault.setOfficialKeeper(deployer, true);
-        console.log("Deployer configurado como keeper oficial");
+        console.log("Deployer configured as official keeper");
 
-        // Detiene el broadcast y muestra mensaje de deployment completado
+        // Stops the broadcast and shows deployment completed message
         vm.stopBroadcast();
-        console.log("=== Deploy completado ===");
+        console.log("=== Deploy completed ===");
     }
 }

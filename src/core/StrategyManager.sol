@@ -10,185 +10,185 @@ import {IStrategyManager} from "../interfaces/core/IStrategyManager.sol";
 /**
  * @title StrategyManager
  * @author cristianrisueo
- * @notice Cerebro del protocolo VynX que decide allocation y ejecuta rebalancing
- * @dev Usa weighted allocation basado en APY para diversificar entre strategies DeFi
- *      Coordina harvest con fail-safe, allocation óptimo y rebalancing rentable
+ * @notice Brain of the VynX protocol that decides allocation and executes rebalancing
+ * @dev Uses weighted allocation based on APY to diversify across DeFi strategies
+ *      Coordinates harvest with fail-safe, optimal allocation and profitable rebalancing
  */
 contract StrategyManager is IStrategyManager, Ownable {
     //* library attachments
 
     /**
-     * @notice Usa SafeERC20 para todas las operaciones de IERC20 de manera segura
-     * @dev Evita errores comunes con tokens legacy o mal implementados
+     * @notice Uses SafeERC20 for all IERC20 operations safely
+     * @dev Avoids common errors with legacy or poorly implemented tokens
      */
     using SafeERC20 for IERC20;
 
-    //* Errores
+    //* Errors
 
     /**
-     * @notice Error cuando no hay estrategias disponibles
+     * @notice Error when no strategies are available
      */
     error StrategyManager__NoStrategiesAvailable();
 
     /**
-     * @notice Error cuando se intenta agregar una estrategia duplicada
+     * @notice Error when attempting to add a duplicate strategy
      */
     error StrategyManager__StrategyAlreadyExists();
 
     /**
-     * @notice Error cuando se intenta remover una estrategia que no existe
+     * @notice Error when attempting to remove a strategy that doesn't exist
      */
     error StrategyManager__StrategyNotFound();
 
     /**
-     * @notice Error cuando la estrategia tiene assets y no se puede remover
+     * @notice Error when the strategy has assets and cannot be removed
      */
     error StrategyManager__StrategyHasAssets();
 
     /**
-     * @notice Error cuando el rebalance no es rentable
+     * @notice Error when the rebalance is not profitable
      */
     error StrategyManager__RebalanceNotProfitable();
 
     /**
-     * @notice Error cuando se intenta operar con cantidad cero
+     * @notice Error when attempting to operate with zero amount
      */
     error StrategyManager__ZeroAmount();
 
     /**
-     * @notice Error cuando solo el vault puede llamar
+     * @notice Error when only the vault can call
      */
     error StrategyManager__OnlyVault();
 
     /**
-     * @notice Error cuando se intenta inicializar vault ya inicializado
+     * @notice Error when attempting to initialize an already initialized vault
      */
     error StrategyManager__VaultAlreadyInitialized();
 
     /**
-     * @notice Error cuando el asset de la estrategia no coincide
+     * @notice Error when the strategy's asset doesn't match
      */
     error StrategyManager__AssetMismatch();
 
     /**
-     * @notice Error cuando se pasa address(0) como vault
+     * @notice Error when address(0) is passed as vault
      */
     error StrategyManager__InvalidVaultAddress();
 
-    //* Eventos: Se heredan de la interfaz, no es necesario implementarlos
+    //* Events: Inherited from the interface, no need to implement them
 
-    //* Constantes
+    //* Constants
 
-    /// @notice Base para calculos de basis points (100% = 10000 basis points)
+    /// @notice Base for basis points calculations (100% = 10000 basis points)
     uint256 public constant BASIS_POINTS = 10000;
 
-    /// @notice Maximo de estrategias permitidas para prevenir DoS por gas en loops
+    /// @notice Maximum strategies allowed to prevent gas DoS in loops
     uint256 public constant MAX_STRATEGIES = 10;
 
-    //* Variables de estado
+    //* State variables
 
-    /// @notice Direccion del vault autorizado para llamar allocate/withdraw/harvest
+    /// @notice Address of the vault authorized to call allocate/withdraw/harvest
     address public vault;
 
-    /// @notice Array de estrategias disponibles
+    /// @notice Array of available strategies
     IStrategy[] public strategies;
 
-    /// @notice Mapeo para verificar rapidamente si una estrategia existe
+    /// @notice Mapping for quickly verifying if a strategy exists
     mapping(address => bool) public is_strategy;
 
-    /// @notice Target allocation para las estrategias, en basis points (10000 = 100%)
+    /// @notice Target allocation for strategies, in basis points (10000 = 100%)
     mapping(IStrategy => uint256) public target_allocation;
 
-    /// @notice Direccion del asset subyacente del protocolo
+    /// @notice Address of the protocol's underlying asset
     address public immutable asset;
 
-    //? Por qué definirlo aquí y no en el constructor? Es una buena práctica, dejamos el
-    //? constructor lo más simple posible para que no haya posibles fallos en deployment
+    //? Why define it here and not in the constructor? It's a good practice, we keep the
+    //? constructor as simple as possible so there are no possible failures in deployment
 
-    /// @notice Threshold minimo de diferencia de APY para considerar rebalance (2% en basis points)
+    /// @notice Minimum APY difference threshold to consider rebalance (2% in basis points)
     uint256 public rebalance_threshold = 200;
 
-    /// @notice TVL minimo para ejecutar rebalance (hasta que llegue aquí se acumula en el idle buffer)
+    /// @notice Minimum TVL to execute rebalance (until it reaches here it accumulates in the idle buffer)
     uint256 public min_tvl_for_rebalance = 10 ether;
 
-    /// @notice Allocation maximo por estrategia en basis points (50%)
+    /// @notice Maximum allocation per strategy in basis points (50%)
     uint256 public max_allocation_per_strategy = 5000;
 
-    /// @notice Allocation minimo por estrategia en basis points (10%)
+    /// @notice Minimum allocation per strategy in basis points (10%)
     uint256 public min_allocation_threshold = 1000;
 
-    //* Modificadores
+    //* Modifiers
 
     /**
-     * @notice Solo permite llamadas del vault
+     * @notice Only allows calls from the vault
      */
     modifier onlyVault() {
         if (msg.sender != vault) revert StrategyManager__OnlyVault();
         _;
     }
 
-    //* Constructor y función de inicialización (problema chicken-egg, más info en comentario)
+    //* Constructor and initialization function (chicken-egg problem, more info in comment)
 
     /**
-     * @notice Constructor del StrategyManager
-     * @dev Inicializa con la dirección del asset a gestionar
-     * @param _asset Direccion del asset subyacente
+     * @notice StrategyManager constructor
+     * @dev Initializes with the address of the asset to manage
+     * @param _asset Address of the underlying asset
      */
     constructor(address _asset) Ownable(msg.sender) {
-        // Comprueba que el asset no sea address(0) y setea el asset
+        // Checks that the asset is not address(0) and sets the asset
         if (_asset == address(0)) revert StrategyManager__AssetMismatch();
         asset = _asset;
     }
 
     /**
-     * @notice Inicializa el vault (solo si aun no está inicializado)
-     * @dev Resuelve el problema de dependencias ciruculares en deployment y testing
-     *      Vault necesita dirección de manager y manager necesita dirección de vault
-     *      En constructor de manager ya no seteamos el address vault, y una vez que tengamos
-     *      ambos contratos desplegados actualizamos el manager con el address del vault
-     * @dev Solo puede llamarse una vez, cuando vault == address(0)
-     * @param _vault Direccion del Vault
+     * @notice Initializes the vault (only if not yet initialized)
+     * @dev Solves the circular dependency problem in deployment and testing
+     *      Vault needs the manager address and manager needs the vault address
+     *      In the manager constructor we no longer set the vault address, and once we have
+     *      both contracts deployed we update the manager with the vault address
+     * @dev Can only be called once, when vault == address(0)
+     * @param _vault Address of the Vault
      */
     function initialize(address _vault) external onlyOwner {
-        // Comprueba que el vault no este inicializado previamente y el address recibido != 0
+        // Checks that the vault is not previously initialized and the received address != 0
         if (vault != address(0)) revert StrategyManager__VaultAlreadyInitialized();
         if (_vault == address(0)) revert StrategyManager__InvalidVaultAddress();
 
-        // Setea el vault y emite evento
+        // Sets the vault and emits event
         vault = _vault;
         emit Initialized(_vault);
     }
 
-    //* Lógica de negocio principal: Allocation, retiros y harvest (only vault)
+    //* Main business logic: Allocation, withdrawals and harvest (only vault)
 
     /**
-     * @notice Deposita assets distribuyendolos entre estrategias segun target allocation
-     * @dev Solo puede ser llamado por el vault
-     * @dev El vault debe transferir assets a este contrato antes de llamar
-     * @param assets Cantidad de assets a invertir en las estrategias
+     * @notice Deposits assets distributing them across strategies according to target allocation
+     * @dev Can only be called by the vault
+     * @dev The vault must transfer assets to this contract before calling
+     * @param assets Amount of assets to invest in the strategies
      */
     function allocate(uint256 assets) external onlyVault {
-        // Comprueba que la cantidad a transferir no sea 0 y que existan estrategias disponibles
+        // Checks that the amount to transfer is not 0 and that available strategies exist
         if (assets == 0) revert StrategyManager__ZeroAmount();
         if (strategies.length == 0) revert StrategyManager__NoStrategiesAvailable();
 
-        // Calcula target allocations nuevos basados en APYs actuales (este sí cambia el state)
+        // Calculates new target allocations based on current APYs (this one does change the state)
         _calculateTargetAllocation();
 
-        // Itera sobre las estrategias disponibles para distribuir los assets según su nuevo target allocation
+        // Iterates over available strategies to distribute assets according to their new target allocation
         for (uint256 i = 0; i < strategies.length; i++) {
-            // Obtiene la estrategia y su target allocation
+            // Gets the strategy and its target allocation
             IStrategy strategy = strategies[i];
             uint256 target = target_allocation[strategy];
 
-            // Si la estrategia tiene allocation > 0, deposita proporcionalmente
+            // If the strategy has allocation > 0, deposits proportionally
             if (target > 0) {
-                // Calcula cuanto debe recibir esta estrategia (% del total)
-                // La formula es: (cantidad * target) / BASIS_POINTS
+                // Calculates how much this strategy should receive (% of total)
+                // The formula is: (amount * target) / BASIS_POINTS
                 uint256 amount_for_strategy = (assets * target) / BASIS_POINTS;
 
-                // Transfiere la cantidad correspondiente (un % del total) a la estrategia,
-                // invoca el método deposit de dicha estrategia y emite evento
+                // Transfers the corresponding amount (a % of total) to the strategy,
+                // invokes the deposit method of said strategy and emits event
                 if (amount_for_strategy > 0) {
                     IERC20(asset).safeTransfer(address(strategy), amount_for_strategy);
                     strategy.deposit(amount_for_strategy);
@@ -199,69 +199,69 @@ contract StrategyManager is IStrategyManager, Ownable {
     }
 
     /**
-     * @notice Retira assets del manager hacia el vault
-     * @dev Solo puede ser llamado por el vault
-     * @dev Retira proporcionalmente de cada estrategia para mantener sus porcentajes iguales,
-     *      gracias a que retira proporcionalmente no tenemos que llamar a _calculateTargetAllocation
-     *      ahorrando de paso un puto montón de gas, porque los allocations siguen en la misma proporción
-     * @param assets Cantidad de assets a retirar
-     * @param receiver Direccion que recibira los assets (debe ser el vault)
+     * @notice Withdraws assets from the manager to the vault
+     * @dev Can only be called by the vault
+     * @dev Withdraws proportionally from each strategy to maintain their percentages equal,
+     *      thanks to withdrawing proportionally we don't have to call _calculateTargetAllocation
+     *      saving a fuckton of gas in the process, because allocations remain in the same proportion
+     * @param assets Amount of assets to withdraw
+     * @param receiver Address that will receive the assets (must be the vault)
      */
     function withdrawTo(uint256 assets, address receiver) external onlyVault {
-        // Comprueba que la cantidad a retirar no sea 0
+        // Checks that the amount to withdraw is not 0
         if (assets == 0) revert StrategyManager__ZeroAmount();
 
-        // Obtiene los assets totales del manager. Si no tiene assets retorna sin hacer nada
+        // Gets the manager's total assets. If it has no assets returns without doing anything
         uint256 total_assets = totalAssets();
         if (total_assets == 0) return;
 
-        // Acumulador de lo realmente retirado de cada estrategia (protocolos externos redondean a la baja -1w)
+        // Accumulator of what was actually withdrawn from each strategy (external protocols round down -1w)
         uint256 total_withdrawn = 0;
 
-        // Itera sobre cada estrategia para retirar proporcialmente
+        // Iterates over each strategy to withdraw proportionally
         for (uint256 i = 0; i < strategies.length; i++) {
-            // Obtiene la estrategia y su balance actual
+            // Gets the strategy and its current balance
             IStrategy strategy = strategies[i];
             uint256 strategy_balance = strategy.totalAssets();
 
-            // Si su balance es 0 omite esta iteración
+            // If its balance is 0 skips this iteration
             if (strategy_balance == 0) continue;
 
-            // Calcula cuanto retirar de esta estrategia (proporcional a su balance)
+            // Calculates how much to withdraw from this strategy (proportional to its balance)
             uint256 to_withdraw = (assets * strategy_balance) / total_assets;
 
-            // Si hay que retirar de esta estrategia usamos el acumulador para acumular lo realmente retirado
-            // lo normal es 1 wei aprox, pero podrían ser 2
+            // If we need to withdraw from this strategy we use the accumulator to accumulate what was actually withdrawn
+            // normally it's about 1 wei, but could be 2
             if (to_withdraw > 0) {
                 uint256 actual = strategy.withdraw(to_withdraw);
                 total_withdrawn += actual;
             }
         }
 
-        // Transfiere al vault lo realmente retirado (99% seguro será menor que lo solicitado)
+        // Transfers to the vault what was actually withdrawn (99% sure it will be less than requested)
         if (total_withdrawn > 0) {
             IERC20(asset).safeTransfer(receiver, total_withdrawn);
         }
     }
 
     /**
-     * @notice Ejecuta harvest en todas las estrategias activas y suma los profits
-     * @dev Solo puede ser llamado por el vault (usuarios llaman Vault.harvest, no Manager.harvest)
-     * @dev Usa try-catch para fail-safe: si una estrategia falla por problemas externos
-     *      continua con las demas y emite evento de error. Este enfoque previene que una estrategia
-     *      rota bloquee el harvest de todas las demas
-     * @return total_profit Suma de profits de todas las estrategias convertido a assets
+     * @notice Executes harvest on all active strategies and sums the profits
+     * @dev Can only be called by the vault (users call Vault.harvest, not Manager.harvest)
+     * @dev Uses try-catch for fail-safe: if a strategy fails due to external problems
+     *      it continues with the rest and emits an error event. This approach prevents a broken
+     *      strategy from blocking the harvest of all the others
+     * @return total_profit Sum of profits from all strategies converted to assets
      */
     function harvest() external onlyVault returns (uint256 total_profit) {
-        // Acumulador de profit (en asset gestionado por el protocolo) de todas las estrategias
+        // Accumulator of profit (in asset managed by the protocol) from all strategies
         total_profit = 0;
 
-        // Itera sobre las estrategias y ejecuta sus harvest con try-catch para seguridad
+        // Iterates over strategies and executes their harvest with try-catch for safety
         for (uint256 i = 0; i < strategies.length; i++) {
             IStrategy strategy = strategies[i];
 
-            // Si el harvest fue exitoso, acumula el profit de esta estrategia
-            // Si falla con o sin mensaje de error, emite evento pero continúa
+            // If the harvest was successful, accumulates the profit from this strategy
+            // If it fails with or without an error message, emits event but continues
             try strategy.harvest() returns (uint256 strategy_profit) {
                 total_profit += strategy_profit;
             } catch Error(string memory reason) {
@@ -271,56 +271,56 @@ contract StrategyManager is IStrategyManager, Ownable {
             }
         }
 
-        // Emite evento de harvest realizado y devuelve el acumulador
+        // Emits harvest completed event and returns the accumulator
         emit Harvested(total_profit);
     }
 
-    //* Lógica de negocio primaria: Rebalance (externa para que cualquiera pueda ejecutar el rebalanceo)
-    //* Esto permite no centralizar el rebalanceo de estrategias e incentivar económicamente que ayuden
+    //* Primary business logic: Rebalance (external so anyone can execute the rebalancing)
+    //* This allows not centralizing strategy rebalancing and economically incentivizing others to help
 
     /**
-     * @notice Rebalancea capital entre estrategias si la operacion es rentable
-     * @dev Mueve capital desde estrategias con bajo APY hacia estrategias con alto APY
-     * @dev Cualquiera puede llamar esta funcion si shouldRebalance()
+     * @notice Rebalances capital between strategies if the operation is profitable
+     * @dev Moves capital from strategies with low APY towards strategies with high APY
+     * @dev Anyone can call this function if shouldRebalance()
      */
     function rebalance() external {
-        // Comprueba si es rentable rebalancear. Si no lo es revierte
+        // Checks if it's profitable to rebalance. If not, reverts
         bool should_rebalance = shouldRebalance();
         if (!should_rebalance) revert StrategyManager__RebalanceNotProfitable();
 
-        // Recalcula targets allocations y obtiene el TVL del protocolo
-        // Estas dos lineas obtienen qué porcentaje repartir y cuánto tenemos para repartir
+        // Recalculates target allocations and gets the protocol's TVL
+        // These two lines get what percentage to distribute and how much we have to distribute
         _calculateTargetAllocation();
         uint256 total_tvl = totalAssets();
 
-        // Arrays vacios para tracking: Estrategias con exceso de fondos y cuanto exceso tienen
+        // Empty arrays for tracking: Strategies with excess funds and how much excess they have
         IStrategy[] memory strategies_with_excess = new IStrategy[](strategies.length);
         uint256[] memory excess_amounts = new uint256[](strategies.length);
 
-        // Arrays vacios para tracking: Estrategias con falta de fondos y cuanta falta tienen
+        // Empty arrays for tracking: Strategies lacking funds and how much they lack
         IStrategy[] memory strategies_needing_funds = new IStrategy[](strategies.length);
         uint256[] memory needed_amounts = new uint256[](strategies.length);
 
-        // Variables para tracking: Counters de estrategias con exceso y con falta de fondos
+        // Tracking variables: Counters for strategies with excess and lacking funds
         uint256 excess_count = 0;
         uint256 needed_count = 0;
 
-        // Itera sobre las estrategias para obtener aquellas con exceso o necesidad de fondos
+        // Iterates over strategies to find those with excess or need for funds
         for (uint256 i = 0; i < strategies.length; i++) {
-            // Obtiene la estrategia i
+            // Gets strategy i
             IStrategy strategy = strategies[i];
 
-            // Obtiene su balance actual y su balance target (el que deberia tener) basado en allocation
+            // Gets its current balance and its target balance (what it should have) based on allocation
             uint256 current_balance = strategy.totalAssets();
             uint256 target_balance = (total_tvl * target_allocation[strategy]) / BASIS_POINTS;
 
-            // Si tiene exceso de fondos: Añade estrategia y exceso a arrays de tracking y aumenta count
+            // If it has excess funds: Adds strategy and excess to tracking arrays and increments count
             if (current_balance > target_balance) {
                 strategies_with_excess[excess_count] = strategy;
                 excess_amounts[excess_count] = current_balance - target_balance;
                 excess_count++;
             }
-            // Si tiene necesidad de fondos: Hace lo mismo con sus arrays y count correspondiente
+            // If it needs funds: Does the same with its corresponding arrays and count
             else if (target_balance > current_balance) {
                 strategies_needing_funds[needed_count] = strategy;
                 needed_amounts[needed_count] = target_balance - current_balance;
@@ -328,133 +328,133 @@ contract StrategyManager is IStrategyManager, Ownable {
             }
         }
 
-        // Itera sobre el contador de estrategias con exceso para mover fondos de estr.exceso -> estr.necesidad
+        // Iterates over the counter of strategies with excess to move funds from excess strat -> needing strat
         for (uint256 i = 0; i < excess_count; i++) {
-            // Obtiene la estrategia con exceso i, y su cantidad excedida
+            // Gets the strategy with excess i, and its excess amount
             IStrategy from_strategy = strategies_with_excess[i];
             uint256 available = excess_amounts[i];
 
-            // Retira el exceso de cantidad de la estrategia i. En este punto el sobrante ya está en el manager
+            // Withdraws the excess amount from strategy i. At this point the surplus is already in the manager
             from_strategy.withdraw(available);
 
-            // Itera sobre el contador de estrategias con necesidad de fondos mientras quede exceso disponible
+            // Iterates over the counter of strategies needing funds while there's excess available
             for (uint256 j = 0; j < needed_count && available > 0; j++) {
-                // Obtiene la estrategia con necesidad j, y su cantidad necesaria
+                // Gets the strategy needing funds j, and its needed amount
                 IStrategy to_strategy = strategies_needing_funds[j];
                 uint256 needed = needed_amounts[j];
 
-                // Si necesita fondos (o sigue necesitando despues de tener todo el exceso de la primera estrategia)
+                // If it needs funds (or still needs them after getting all the excess from the first strategy)
                 if (needed > 0) {
-                    // Se obtiene la cantidad minima entre lo que excede de i y lo que necesita j
+                    // Gets the minimum amount between the excess from i and what j needs
                     uint256 to_transfer = available > needed ? needed : available;
 
-                    // Transfiere la cantidad minima a la estrategia que la necesita, la deposita y emite evento
+                    // Transfers the minimum amount to the strategy that needs it, deposits it and emits event
                     IERC20(asset).safeTransfer(address(to_strategy), to_transfer);
                     to_strategy.deposit(to_transfer);
                     emit Rebalanced(address(from_strategy), address(to_strategy), to_transfer);
 
-                    // Actualiza contadores: Resta lo transferido del exceso disponible y de lo necesario
+                    // Updates counters: Subtracts what was transferred from available excess and from what's needed
                     available -= to_transfer;
                     needed_amounts[j] -= to_transfer;
                 }
             }
         }
 
-        // Emite evento de actualizacion de target allocations
+        // Emits target allocation update event
         emit TargetAllocationUpdated();
     }
 
-    //* Funciones de gestion de estrategias (onlyOwner)
+    //* Strategy management functions (onlyOwner)
 
     /**
-     * @notice Añade una nueva estrategia al pool de estrategias disponibles
-     * @dev Solo puede ser llamado por el owner
-     * @dev Valida que la estrategia no exista previamente y que use el mismo asset
-     * @param strategy Direccion del contrato de estrategia a añadir
+     * @notice Adds a new strategy to the pool of available strategies
+     * @dev Can only be called by the owner
+     * @dev Validates that the strategy doesn't already exist and that it uses the same asset
+     * @param strategy Address of the strategy contract to add
      */
     function addStrategy(address strategy) external onlyOwner {
-        // Comprueba rapidamente si la estrategia ya fue agregada. En caso afirmativo revierte
+        // Quickly checks if the strategy was already added. If so, reverts
         if (is_strategy[strategy]) revert StrategyManager__StrategyAlreadyExists();
 
-        // Comprueba que no se exceda el maximo de estrategias permitidas
+        // Checks that the maximum number of allowed strategies is not exceeded
         if (strategies.length >= MAX_STRATEGIES) revert StrategyManager__NoStrategiesAvailable();
 
-        // Comprueba que la estrategia use el mismo asset que el manager
+        // Checks that the strategy uses the same asset as the manager
         IStrategy strategy_interface = IStrategy(strategy);
         if (strategy_interface.asset() != asset) revert StrategyManager__AssetMismatch();
 
-        // Añade la estrategia al array y el address al mapping de rapida verificacion
+        // Adds the strategy to the array and the address to the quick verification mapping
         strategies.push(strategy_interface);
         is_strategy[strategy] = true;
 
-        // Recalcula allocations para todas las estrategias. Como hemos añadido
-        // esta estrategia, tenemos que recalcular porcentajes de nuevo
+        // Recalculates allocations for all strategies. Since we've added
+        // this strategy, we need to recalculate percentages again
         _calculateTargetAllocation();
 
-        // Emite evento de estrategia añadida
+        // Emits strategy added event
         emit StrategyAdded(strategy);
     }
 
     /**
-     * @notice Remueve una estrategia del manager
-     * @dev Solo el owner puede remover estrategias
-     * @dev La estrategia debe tener balance cero antes de ser removida (usar withdraw primero)
-     * @param index Indice de la estrategia en el array
+     * @notice Removes a strategy from the manager
+     * @dev Only the owner can remove strategies
+     * @dev The strategy must have zero balance before being removed (use withdraw first)
+     * @param index Index of the strategy in the array
      */
     function removeStrategy(uint256 index) external onlyOwner {
-        // Comprueba que el indice sea valido
+        // Checks that the index is valid
         if (index >= strategies.length) revert StrategyManager__StrategyNotFound();
 
-        // Obtiene la estrategia en ese indice, y de la estrategia su address
+        // Gets the strategy at that index, and from the strategy its address
         IStrategy strategy = strategies[index];
         address strategy_address = address(strategy);
 
-        // Comprueba que la estrategia no tenga assets bajo gestion (previene la pérdida de fondos)
+        // Checks that the strategy has no assets under management (prevents loss of funds)
         if (strategy.totalAssets() > 0) revert StrategyManager__StrategyHasAssets();
 
-        // Elimina el allocation (% del TVL) de esta estrategia antes de eliminarla
+        // Deletes the allocation (% of TVL) of this strategy before removing it
         delete target_allocation[strategy];
 
-        // Elimina la estrategia del array y su address del mapping de verificacion rapida
-        // Utiliza la estrategia swap&pop porque ahorra gas (creo que se llamaba asi)
+        // Removes the strategy from the array and its address from the quick verification mapping
+        // Uses the swap&pop strategy because it saves gas (I think that's what it was called)
         strategies[index] = strategies[strategies.length - 1];
         strategies.pop();
         is_strategy[strategy_address] = false;
 
-        // Recalcula allocations para el resto de estrategias. Como hemos eliminado
-        // esta estrategia, su allocation (% TVL) esta disponible para las otras
+        // Recalculates allocations for the remaining strategies. Since we've removed
+        // this strategy, its allocation (% TVL) is available for the others
         if (strategies.length > 0) {
             _calculateTargetAllocation();
         }
 
-        // Emite evento de estrategia eliminada
+        // Emits strategy removed event
         emit StrategyRemoved(strategy_address);
     }
 
-    //* Setters de parametros
+    //* Parameter setters
 
     /**
-     * @notice Actualiza el threshold minimo para rebalancing
-     * @dev Porcentaje de mejora en APY de la nueva estrategia para considerar rebalancear
-     * @param new_threshold Nuevo threshold en basis points
+     * @notice Updates the minimum threshold for rebalancing
+     * @dev Percentage of APY improvement from the new strategy to consider rebalancing
+     * @param new_threshold New threshold in basis points
      */
     function setRebalanceThreshold(uint256 new_threshold) external onlyOwner {
         rebalance_threshold = new_threshold;
     }
 
     /**
-     * @notice Actualiza el TVL minimo para rebalancing
-     * @dev Cuantos assets debe acumular el idle buffer para considerar rebalancear
-     * @param new_min_tvl Nuevo TVL minimo en wei
+     * @notice Updates the minimum TVL for rebalancing
+     * @dev How many assets the idle buffer must accumulate to consider rebalancing
+     * @param new_min_tvl New minimum TVL in wei
      */
     function setMinTVLForRebalance(uint256 new_min_tvl) external onlyOwner {
         min_tvl_for_rebalance = new_min_tvl;
     }
 
     /**
-     * @notice Actualiza el % de allocation maximo por estrategia
-     * @dev Tras actualizar el maximo recalcula los allocations de nuevo
-     * @param new_max Nuevo maximo en basis points
+     * @notice Updates the maximum allocation % per strategy
+     * @dev After updating the maximum, recalculates allocations again
+     * @param new_max New maximum in basis points
      */
     function setMaxAllocationPerStrategy(uint256 new_max) external onlyOwner {
         max_allocation_per_strategy = new_max;
@@ -462,35 +462,35 @@ contract StrategyManager is IStrategyManager, Ownable {
     }
 
     /**
-     * @notice Actualiza el threshold minimo de allocation
-     * @dev Tras actualizar el minimo recalcula los allocations de nuevo
-     * @param new_min Nuevo minimo en basis points
+     * @notice Updates the minimum allocation threshold
+     * @dev After updating the minimum, recalculates allocations again
+     * @param new_min New minimum in basis points
      */
     function setMinAllocationThreshold(uint256 new_min) external onlyOwner {
         min_allocation_threshold = new_min;
         _calculateTargetAllocation();
     }
 
-    //* Funciones de consulta: Check de rebalanceo, TVL del protocolo, stats y count de estrategias
+    //* Query functions: Rebalance check, protocol TVL, stats and strategy count
 
     /**
-     * @notice Comprueba si un rebalanceo seria beneficioso en el momento actual
-     * @dev Valida: suficientes estrategias, TVL minimo y diferencia de APY significativa
-     * @dev Los keepers calculan rentabilidad vs gas cost off-chain antes de ejecutar
-     * @return profitable True si las condiciones para rebalancear se cumplen
+     * @notice Checks if a rebalance would be beneficial at the current moment
+     * @dev Validates: enough strategies, minimum TVL and significant APY difference
+     * @dev Keepers calculate profitability vs gas cost off-chain before executing
+     * @return profitable True if the conditions for rebalancing are met
      */
     function shouldRebalance() public view returns (bool profitable) {
-        // Si no hay estrategias suficientes, no hay nada que rebalancear
+        // If there aren't enough strategies, there's nothing to rebalance
         if (strategies.length < 2) return false;
 
-        // Si el TVL es menor al minimo establecido, no vale la pena rebalancear
+        // If the TVL is less than the established minimum, it's not worth rebalancing
         if (totalAssets() < min_tvl_for_rebalance) return false;
 
-        // Variables para tracking de diferencias de APY
+        // Variables for APY difference tracking
         uint256 max_apy = 0;
         uint256 min_apy = type(uint256).max;
 
-        // Itera sobre las estrategias para encontrar la que mayor y menor APY tienen
+        // Iterates over strategies to find the one with the highest and lowest APY
         for (uint256 i = 0; i < strategies.length; i++) {
             uint256 strategy_apy = strategies[i].apy();
 
@@ -498,15 +498,15 @@ contract StrategyManager is IStrategyManager, Ownable {
             if (strategy_apy < min_apy) min_apy = strategy_apy;
         }
 
-        // Rebalance es beneficioso si la diferencia de APY supera el threshold de rebalanceo
+        // Rebalance is beneficial if the APY difference exceeds the rebalance threshold
         return (max_apy - min_apy) >= rebalance_threshold;
     }
 
     /**
-     * @notice Devuelve el total de assets bajo gestion del manager en las estrategias
-     * @dev Suma de assets de todas las estrategias, tendrán xToken, la suma se vendrá
-     *      convertida a assets
-     * @return total Suma de assets en todas las estrategias
+     * @notice Returns the total assets under management in the manager's strategies
+     * @dev Sum of assets from all strategies, they will have xToken, the sum will come
+     *      converted to assets
+     * @return total Sum of assets across all strategies
      */
     function totalAssets() public view returns (uint256 total) {
         for (uint256 i = 0; i < strategies.length; i++) {
@@ -515,37 +515,37 @@ contract StrategyManager is IStrategyManager, Ownable {
     }
 
     /**
-     * @notice Devuelve el numero de estrategias disponibles
-     * @return count Cantidad de estrategias
+     * @notice Returns the number of available strategies
+     * @return count Number of strategies
      */
     function strategiesCount() external view returns (uint256 count) {
         return strategies.length;
     }
 
     /**
-     * @notice Devuelve informacion de todas las estrategias
-     * @dev ADVERTENCIA: Gas intensivo (+1M aprox), solo usar para consultas off-chain
-     *      o frontend. Si la llamas desde otro contrato, bajo tu cuenta y riesgo buddy
-     * @return names Nombre de las estrategias
-     * @return apys APYs de cada estrategia
-     * @return tvls TVL de cada estrategia
-     * @return targets Target allocation de cada estrategia
+     * @notice Returns information about all strategies
+     * @dev WARNING: Gas intensive (+1M approx), only use for off-chain queries
+     *      or frontend. If you call it from another contract, at your own risk buddy
+     * @return names Names of the strategies
+     * @return apys APYs of each strategy
+     * @return tvls TVL of each strategy
+     * @return targets Target allocation of each strategy
      */
     function getAllStrategiesInfo()
         external
         view
         returns (string[] memory names, uint256[] memory apys, uint256[] memory tvls, uint256[] memory targets)
     {
-        // Obtiene el tamaño del array de estrategias
+        // Gets the size of the strategies array
         uint256 length = strategies.length;
 
-        // Crea los arrays de info con el tamaño de estrategias seteado
+        // Creates the info arrays with the set strategies size
         names = new string[](length);
         apys = new uint256[](length);
         tvls = new uint256[](length);
         targets = new uint256[](length);
 
-        // Recorre el array de estrategias y setea valores en los nuevos arrays
+        // Iterates over the strategies array and sets values in the new arrays
         for (uint256 i = 0; i < length; i++) {
             names[i] = strategies[i].name();
             apys[i] = strategies[i].apy();
@@ -554,32 +554,32 @@ contract StrategyManager is IStrategyManager, Ownable {
         }
     }
 
-    //* Funciones internas usadas por el resto de metodos del contrato
+    //* Internal functions used by the rest of the contract's methods
 
     /**
-     * @notice Calcula targets de allocation para cada estrategia basado en APY
-     *         Recuerdo: Target allocation = % del TVL que va a cada estrategia
-     * @dev Helper interno usado por shouldRebalance y _calculateTargetAllocation
-     * @dev Aplica caps (max 50%, min 10%) y normaliza para que sume 100%
-     * @return targets Array con allocation en basis points por estrategia
+     * @notice Calculates allocation targets for each strategy based on APY
+     *         Reminder: Target allocation = % of TVL that goes to each strategy
+     * @dev Internal helper used by shouldRebalance and _calculateTargetAllocation
+     * @dev Applies caps (max 50%, min 10%) and normalizes so they sum to 100%
+     * @return targets Array with allocation in basis points per strategy
      */
     function _computeTargets() internal view returns (uint256[] memory targets) {
-        // Si no hay estrategias devuelve array vacio
+        // If there are no strategies returns empty array
         if (strategies.length == 0) {
             return new uint256[](0);
         }
 
-        // Si hay estrategias crea array para los targets calculados del tamaño de las estrategias
+        // If there are strategies creates array for calculated targets with the size of the strategies
         targets = new uint256[](strategies.length);
 
-        // Suma los APYs de todas las estrategias activas
+        // Sums the APYs of all active strategies
         uint256 total_apy = 0;
 
         for (uint256 i = 0; i < strategies.length; i++) {
             total_apy += strategies[i].apy();
         }
 
-        // Si no hay APY (imagina que todas en 0%), distribuye equitativamente el TVL y retorna
+        // If there's no APY (imagine all at 0%), distributes TVL equally and returns
         if (total_apy == 0) {
             uint256 equal_share = BASIS_POINTS / strategies.length;
 
@@ -590,63 +590,63 @@ contract StrategyManager is IStrategyManager, Ownable {
             return targets;
         }
 
-        // Este es el escenario normal. Calcula targets basados en APY y aplica caps
+        // This is the normal scenario. Calculates targets based on APY and applies caps
         for (uint256 i = 0; i < strategies.length; i++) {
-            // Obtiene el APY de la estrategia, y calcula su target sin limites
+            // Gets the strategy's APY, and calculates its target without limits
             uint256 strategy_apy = strategies[i].apy();
             uint256 uncapped_target = (strategy_apy * BASIS_POINTS) / total_apy;
 
-            // Si supera el maximo, su target allocation es el maximo
+            // If it exceeds the maximum, its target allocation is the maximum
             if (uncapped_target > max_allocation_per_strategy) {
                 targets[i] = max_allocation_per_strategy;
             }
-            // Si no llega al minimo, su target allocation es 0
+            // If it doesn't reach the minimum, its target allocation is 0
             else if (uncapped_target < min_allocation_threshold) {
                 targets[i] = 0;
             }
-            // Si esta entre el maximo y el minimo, se queda con el calculado
+            // If it's between the maximum and minimum, it keeps the calculated one
             else {
                 targets[i] = uncapped_target;
             }
         }
 
-        // Normaliza targets para que sumen exactamente BASIS_POINTS (100%)
+        // Normalizes targets so they sum exactly to BASIS_POINTS (100%)
         uint256 total_targets = 0;
         for (uint256 i = 0; i < strategies.length; i++) {
             total_targets += targets[i];
         }
 
-        // Si no suman BASIS_POINTS, redistribuye proporcionalmente
+        // If they don't sum to BASIS_POINTS, redistributes proportionally
         if (total_targets > 0 && total_targets != BASIS_POINTS) {
             for (uint256 i = 0; i < strategies.length; i++) {
                 targets[i] = (targets[i] * BASIS_POINTS) / total_targets;
             }
         }
 
-        // Devuelve array de targets calculados
+        // Returns the array of calculated targets
         return targets;
     }
 
     /**
-     * @notice Calcula el target allocation para cada estrategia basado en APY
-     *         Recuerdo: Target allocation = % del TVL que va a cada estrategia
-     * @dev Usa weighted allocation para repartir TVL -> mayor APY = mayor porcentaje
-     *      Esta es la funcion que usan el resto de metodos de logica principal del contrato
-     * @dev Aplica limites, max 50%, min 10% (por si lo oyes limites = caps)
+     * @notice Calculates the target allocation for each strategy based on APY
+     *         Reminder: Target allocation = % of TVL that goes to each strategy
+     * @dev Uses weighted allocation to distribute TVL -> higher APY = higher percentage
+     *      This is the function that the rest of the contract's main logic methods use
+     * @dev Applies limits, max 50%, min 10% (in case you hear it, limits = caps)
      */
     function _calculateTargetAllocation() internal {
-        // Si no existen estrategias retorna
+        // If no strategies exist, returns
         if (strategies.length == 0) return;
 
-        // Calcula targets usando funcion interna
+        // Calculates targets using internal function
         uint256[] memory computed_allocations = _computeTargets();
 
-        // Escribe los targets calculados al storage (el mapping)
+        // Writes the calculated targets to storage (the mapping)
         for (uint256 i = 0; i < strategies.length; i++) {
             target_allocation[strategies[i]] = computed_allocations[i];
         }
 
-        // Emite evento de targets allocations actualizados
+        // Emits target allocations updated event
         emit TargetAllocationUpdated();
     }
 }

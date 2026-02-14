@@ -9,17 +9,17 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 /**
  * @title CompoundStrategyTest
  * @author cristianrisueo
- * @notice Tests unitarios para CompoundStrategy con fork de Mainnet
- * @dev Fork test real contra Compound v3 - valida deposits, withdrawals y APY
+ * @notice Unit tests for CompoundStrategy with Mainnet fork
+ * @dev Real fork test against Compound v3 - validates deposits, withdrawals and APY
  */
 contract CompoundStrategyTest is Test {
-    //* Variables de estado
+    //* State variables
 
-    /// @notice Instancia de la estrategia y manager
+    /// @notice Instance of the strategy and manager
     CompoundStrategy public strategy;
     StrategyManager public manager;
 
-    /// @notice Direcciones de los contratos en Mainnet
+    /// @notice Contract addresses on Mainnet
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant COMPOUND_COMET = 0xA17581A9E3356d9A858b789D68B4d866e593aE94;
     address constant COMPOUND_REWARDS = 0x1B0e765F6224C21223AeA2af16c1C46E38885a40;
@@ -27,65 +27,65 @@ contract CompoundStrategyTest is Test {
     address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
     uint24 constant POOL_FEE = 3000;
 
-    /// @notice Usuario de prueba
+    /// @notice Test user
     address public alice = makeAddr("alice");
 
-    //* Setup del entorno de testing
+    //* Testing environment setup
 
     /**
-     * @notice Configura el entorno de testing
-     * @dev Fork de Mainnet para interactuar con Compound v3 real
+     * @notice Configures the testing environment
+     * @dev Mainnet fork to interact with real Compound v3
      */
     function setUp() public {
-        // Crea un fork de Mainnet
+        // Create a Mainnet fork
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Inicializa manager (necesario para la estrategia)
+        // Initialize manager (needed for the strategy)
         manager = new StrategyManager(WETH);
 
-        // Inicializa la estrategia
+        // Initialize the strategy
         strategy = new CompoundStrategy(address(manager), COMPOUND_COMET, COMPOUND_REWARDS, WETH, COMP_TOKEN, UNISWAP_ROUTER, POOL_FEE);
     }
 
-    //* Funciones internas helpers
+    //* Internal helper functions
 
     /**
-     * @notice Helper para depositar en la estrategia como manager
-     * @param amount Cantidad a depositar
+     * @notice Helper to deposit into the strategy as manager
+     * @param amount Amount to deposit
      */
     function _deposit(uint256 amount) internal {
-        // Da WETH a la estrategia y deposita como manager
+        // Give WETH to the strategy and deposit as manager
         deal(WETH, address(strategy), amount);
         vm.prank(address(manager));
         strategy.deposit(amount);
     }
 
     /**
-     * @notice Helper para retirar de la estrategia como manager
-     * @param amount Cantidad a retirar
+     * @notice Helper to withdraw from the strategy as manager
+     * @param amount Amount to withdraw
      */
     function _withdraw(uint256 amount) internal {
         vm.prank(address(manager));
         strategy.withdraw(amount);
     }
 
-    //* Testing de deposit
+    //* Deposit testing
 
     /**
-     * @notice Test de depósito básico en Compound
-     * @dev Comprueba que el depósito se realice correctamente
+     * @notice Basic deposit into Compound test
+     * @dev Checks that the deposit is executed correctly
      */
     function test_Deposit_Basic() public {
-        // Deposita en Compound
+        // Deposit into Compound
         _deposit(10 ether);
 
-        // Comprueba que totalAssets refleje el depósito
+        // Check that totalAssets reflects the deposit
         assertApproxEqRel(strategy.totalAssets(), 10 ether, 0.001e18);
     }
 
     /**
-     * @notice Test de depósito solo desde manager
-     * @dev Comprueba que solo el manager pueda depositar
+     * @notice Deposit only from manager test
+     * @dev Checks that only the manager can deposit
      */
     function test_Deposit_RevertIfNotManager() public {
         deal(WETH, address(strategy), 10 ether);
@@ -95,45 +95,45 @@ contract CompoundStrategyTest is Test {
         strategy.deposit(10 ether);
     }
 
-    //* Testing de withdraw
+    //* Withdraw testing
 
     /**
-     * @notice Test de retiro básico de Compound
-     * @dev Comprueba que el retiro se realice correctamente
+     * @notice Basic withdrawal from Compound test
+     * @dev Checks that the withdrawal is executed correctly
      */
     function test_Withdraw_Basic() public {
-        // Deposita primero
+        // Deposit first
         _deposit(10 ether);
 
-        // Retira la mitad
+        // Withdraw half
         _withdraw(5 ether);
 
-        // Comprueba que el manager recibió los fondos
+        // Check that the manager received the funds
         assertEq(IERC20(WETH).balanceOf(address(manager)), 5 ether);
 
-        // Comprueba que queda aproximadamente la mitad
+        // Check that approximately half remains
         assertApproxEqRel(strategy.totalAssets(), 5 ether, 0.001e18);
     }
 
     /**
-     * @notice Test de retiro total de Compound
-     * @dev Comprueba que se pueda retirar todo
+     * @notice Full withdrawal from Compound test
+     * @dev Checks that everything can be withdrawn
      */
     function test_Withdraw_Full() public {
-        // Deposita
+        // Deposit
         _deposit(10 ether);
 
-        // Retira todo
+        // Withdraw everything
         uint256 balance = strategy.totalAssets();
         _withdraw(balance);
 
-        // Comprueba que el balance sea aproximadamente 0 (puede haber dust)
+        // Check that the balance is approximately 0 (there may be dust)
         assertLt(strategy.totalAssets(), 0.0001 ether);
     }
 
     /**
-     * @notice Test de retiro solo desde manager
-     * @dev Comprueba que solo el manager pueda retirar
+     * @notice Withdrawal only from manager test
+     * @dev Checks that only the manager can withdraw
      */
     function test_Withdraw_RevertIfNotManager() public {
         _deposit(10 ether);
@@ -143,61 +143,61 @@ contract CompoundStrategyTest is Test {
         strategy.withdraw(5 ether);
     }
 
-    //* Testing de funciones de consulta
+    //* Query function testing
 
     /**
-     * @notice Test de APY
-     * @dev Comprueba que el APY sea un valor razonable
+     * @notice APY test
+     * @dev Checks that the APY is a reasonable value
      */
     function test_Apy_ReturnsValidValue() public view {
         uint256 apy = strategy.apy();
 
-        // El APY debería estar entre 0% y 50% (0 - 5000 bp)
+        // The APY should be between 0% and 50% (0 - 5000 bp)
         assertLt(apy, 5000);
     }
 
     /**
-     * @notice Test de nombre de la estrategia
-     * @dev Comprueba que devuelva el nombre correcto
+     * @notice Strategy name test
+     * @dev Checks that it returns the correct name
      */
     function test_Name() public view {
         assertEq(strategy.name(), "Compound v3 Strategy");
     }
 
     /**
-     * @notice Test de asset
-     * @dev Comprueba que devuelva la dirección de WETH
+     * @notice Asset test
+     * @dev Checks that it returns the WETH address
      */
     function test_Asset() public view {
         assertEq(strategy.asset(), WETH);
     }
 
     /**
-     * @notice Test de supply rate
-     * @dev Comprueba que getSupplyRate devuelva un valor válido
+     * @notice Supply rate test
+     * @dev Checks that getSupplyRate returns a valid value
      */
     function test_GetSupplyRate() public view {
         uint256 rate = strategy.getSupplyRate();
 
-        // El rate debería ser > 0 si hay utilización
-        // No hacemos assert fuerte porque puede ser 0 si utilization = 0
+        // The rate should be > 0 if there's utilization
+        // We don't do a strong assert because it can be 0 if utilization = 0
         assertLt(rate, type(uint256).max);
     }
 
     /**
-     * @notice Test de utilización
-     * @dev Comprueba que getUtilization devuelva un valor válido
+     * @notice Utilization test
+     * @dev Checks that getUtilization returns a valid value
      */
     function test_GetUtilization() public view {
         uint256 utilization = strategy.getUtilization();
 
-        // La utilización debería estar entre 0% y 100% (0 - 1e18)
+        // Utilization should be between 0% and 100% (0 - 1e18)
         assertLe(utilization, 1e18);
     }
 
     /**
-     * @notice Test de totalAssets sin depósitos
-     * @dev Comprueba que devuelva 0 sin depósitos
+     * @notice totalAssets without deposits test
+     * @dev Checks that it returns 0 without deposits
      */
     function test_TotalAssets_ZeroWithoutDeposits() public view {
         assertEq(strategy.totalAssets(), 0);

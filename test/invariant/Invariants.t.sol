@@ -12,23 +12,23 @@ import {Handler} from "./Handler.sol";
 /**
  * @title InvariantsTest
  * @author cristianrisueo
- * @notice Invariant tests stateful para el protocolo
- * @dev A diferencia de fuzz tests, aquí Foundry ejecuta secuencias ALEATORIAS de llamadas
- *      al Handler (deposit, withdraw, deposit, withdraw...) y tras cada secuencia verifica
- *      que las invariantes se cumplan. Esto encuentra bugs que solo aparecen con combinaciones
- *      específicas de operaciones
+ * @notice Stateful invariant tests for the protocol
+ * @dev Unlike fuzz tests, here Foundry executes RANDOM sequences of calls
+ *      to the Handler (deposit, withdraw, deposit, withdraw...) and after each sequence verifies
+ *      that the invariants hold. This finds bugs that only appear with specific
+ *      combinations of operations
  */
 contract InvariantsTest is Test {
-    //* Variables de estado
+    //* State variables
 
-    /// @notice Instancias del protocolo
+    /// @notice Protocol instances
     Vault public vault;
     StrategyManager public manager;
     AaveStrategy public aave_strategy;
     CompoundStrategy public compound_strategy;
     Handler public handler;
 
-    /// @notice Direcciones de los contratos en Mainnet
+    /// @notice Contract addresses on Mainnet
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address constant COMPOUND_COMET = 0xA17581A9E3356d9A858b789D68B4d866e593aE94;
@@ -39,110 +39,110 @@ contract InvariantsTest is Test {
     address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
     uint24 constant POOL_FEE = 3000;
 
-    /// @notice Lista de usuarios simulados
+    /// @notice List of simulated users
     address[] public actors;
 
-    //* Setup del entorno de testing
+    //* Testing environment setup
 
     /**
-     * @notice Configura protocolo, handler y target contracts para el fuzzer
-     * @dev El handler es el único target para que Foundry solo llame deposit/withdraw acotados
+     * @notice Configures protocol, handler and target contracts for the fuzzer
+     * @dev The handler is the only target so that Foundry only calls bounded deposit/withdraw
      */
     function setUp() public {
-        // Crea un fork de Mainnet
+        // Create a Mainnet fork
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Despliega y conecta vault y manager
+        // Deploy and connect vault and manager
         manager = new StrategyManager(WETH);
         vault = new Vault(WETH, address(manager), address(this), makeAddr("founder"));
         manager.initialize(address(vault));
 
-        // Configura al test contract como keeper oficial
+        // Configure the test contract as official keeper
         vault.setOfficialKeeper(address(this), true);
 
-        // Despliega estrategias con direcciones reales de Mainnet
+        // Deploy strategies with real Mainnet addresses
         aave_strategy = new AaveStrategy(address(manager), AAVE_POOL, AAVE_REWARDS, WETH, AAVE_TOKEN, UNISWAP_ROUTER, POOL_FEE);
         compound_strategy = new CompoundStrategy(address(manager), COMPOUND_COMET, COMPOUND_REWARDS, WETH, COMP_TOKEN, UNISWAP_ROUTER, POOL_FEE);
 
-        // Conecta estrategias al manager
+        // Connect strategies to the manager
         manager.addStrategy(address(aave_strategy));
         manager.addStrategy(address(compound_strategy));
 
-        // Crea actores para el handler
+        // Create actors for the handler
         actors.push(makeAddr("actor1"));
         actors.push(makeAddr("actor2"));
         actors.push(makeAddr("actor3"));
 
-        // Despliega el handler y lo configura como único target de los tests
+        // Deploy the handler and configure it as the only test target
         handler = new Handler(vault, actors);
         targetContract(address(handler));
     }
 
-    //* Invariantes: propiedades que SIEMPRE deben cumplirse
+    //* Invariants: properties that must ALWAYS hold
 
     /**
-     * @notice Invariante: El vault siempre es solvente
-     * @dev Tras cualquier secuencia de deposits y withdraws, los assets reales del vault
-     *      deben ser >= las shares emitidas. Si esto falla, el vault debe más de lo que tiene
-     *      y los últimos usuarios en retirar perderían fondos
-     * @dev Un vault solvente siempre tiene totalAssets >= totalSupply (1 share vale >= 1 asset).
-     *      Usamos un margen del 1% para tolerar fees de protocolos externos (Aave/Compound)
-     *      al depositar/retirar, que pueden causar pequeñas pérdidas por slippage/rounding
+     * @notice Invariant: The vault is always solvent
+     * @dev After any sequence of deposits and withdrawals, the vault's real assets
+     *      must be >= the shares issued. If this fails, the vault owes more than it has
+     *      and the last users to withdraw would lose funds
+     * @dev A solvent vault always has totalAssets >= totalSupply (1 share is worth >= 1 asset).
+     *      We use a 1% margin to tolerate fees from external protocols (Aave/Compound)
+     *      when depositing/withdrawing, which can cause small losses due to slippage/rounding
      */
     function invariant_VaultIsSolvent() public view {
-        // Cogemos los assets (WETH) y supply (shares) totales del vault
+        // Get the assets (WETH) and total supply (shares) of the vault
         uint256 total_assets = vault.totalAssets();
         uint256 total_supply = vault.totalSupply();
 
-        // Si no hay shares, no hay nada que comprobar
+        // If there are no shares, there's nothing to check
         if (total_supply == 0) return;
 
-        // totalAssets debe ser >= totalSupply con margen del 1% para fees de protocolos
-        // El yield hace que totalAssets crezca respecto a totalSupply (correcto, el vault gana dinero)
-        // Solo sería insolvente si total_assets < total_supply * 0.99
+        // totalAssets must be >= totalSupply with 1% margin for protocol fees
+        // Yield causes totalAssets to grow relative to totalSupply (correct, the vault makes money)
+        // It would only be insolvent if total_assets < total_supply * 0.99
         assertGe(
             total_assets * 10000,
             total_supply * 9900,
-            "INVARIANTE ROTA: Vault insolvente (totalAssets < 99% de totalSupply)"
+            "INVARIANT BROKEN: Vault insolvent (totalAssets < 99% of totalSupply)"
         );
     }
 
     /**
-     * @notice Invariante: La contabilidad siempre cuadra (idle + manager = totalAssets)
-     * @dev El vault reporta totalAssets como idle_buffer + manager.totalAssets()
-     *      Si esto no cuadra, hay fondos fantasma o fondos perdidos
+     * @notice Invariant: The accounting always adds up (idle + manager = totalAssets)
+     * @dev The vault reports totalAssets as idle_buffer + manager.totalAssets()
+     *      If this doesn't add up, there are phantom funds or lost funds
      */
     function invariant_AccountingIsConsistent() public view {
-        // Obtenemos los assets del IDLE buffer, el manager (depósitos en estrategias) y el TVL del protocolo
+        // Get the assets from the IDLE buffer, the manager (deposits in strategies) and the protocol TVL
         uint256 idle = vault.idle_buffer();
         uint256 manager_assets = manager.totalAssets();
         uint256 total_assets = vault.totalAssets();
 
-        // Comprobamos que el TVL = buffer idle + depósitos en estrategias
-        assertEq(idle + manager_assets, total_assets, "INVARIANTE ROTA: Contabilidad descuadrada");
+        // Check that TVL = idle buffer + deposits in strategies
+        assertEq(idle + manager_assets, total_assets, "INVARIANT BROKEN: Accounting mismatch");
     }
 
     /**
-     * @notice Invariante: totalSupply es coherente con los balances individuales
-     * @dev La suma de shares de todos los actores + holders conocidos debe ser <= totalSupply
-     *      Si es mayor, se están creando shares de la nada
-     * @dev El treasury recibe shares por performance fees durante harvest, así que lo incluimos
-     *      en la suma de holders conocidos junto con los actores del handler
+     * @notice Invariant: totalSupply is coherent with individual balances
+     * @dev The sum of shares of all actors + known holders must be <= totalSupply
+     *      If it's greater, shares are being created out of thin air
+     * @dev The treasury receives shares from performance fees during harvest, so we include it
+     *      in the sum of known holders along with the handler's actors
      */
     function invariant_SupplyIsCoherent() public view {
-        // Obtenemos el totalsupply de shares del vault y el acumulador para iteraciones
+        // Get the total supply of shares from the vault and the accumulator for iterations
         uint256 total_supply = vault.totalSupply();
         uint256 known_holders_sum = 0;
 
-        // Suma los balances de todos los actores del handler
+        // Sum the balances of all actors from the handler
         for (uint256 i = 0; i < actors.length; i++) {
             known_holders_sum += vault.balanceOf(actors[i]);
         }
 
-        // Suma el balance del treasury (recibe shares por performance fees en harvest)
+        // Sum the treasury balance (receives shares from performance fees in harvest)
         known_holders_sum += vault.balanceOf(vault.treasury_address());
 
-        // La suma de balances de holders conocidos debe ser <= totalSupply
-        assertLe(known_holders_sum, total_supply, "INVARIANTE ROTA: Shares aparecieron de la nada");
+        // The sum of known holders' balances must be <= totalSupply
+        assertLe(known_holders_sum, total_supply, "INVARIANT BROKEN: Shares appeared out of thin air");
     }
 }

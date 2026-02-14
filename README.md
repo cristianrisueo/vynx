@@ -1,129 +1,129 @@
 # VynX Protocol v1
 
-Protocolo de optimizacion de rendimiento (yield aggregator) construido con Solidity 0.8.33 y Foundry. Implementa un vault ERC4626 que distribuye WETH entre multiples estrategias DeFi (Aave v3 y Compound v3) y cosecha rewards automaticamente via Uniswap V3 para maximizar yield compuesto.
+Yield optimization protocol (yield aggregator) built with Solidity 0.8.33 and Foundry. Implements an ERC4626 vault that distributes WETH across multiple DeFi strategies (Aave v3 and Compound v3) and automatically harvests rewards via Uniswap V3 to maximize compound yield.
 
-## Descripcion
+## Description
 
-VynX es un protocolo de gestion automatizada de activos que permite a los usuarios depositar WETH y beneficiarse de una diversificacion inteligente entre diferentes protocolos de lending. El sistema calcula continuamente los mejores ratios de distribucion basandose en los APYs ofrecidos por cada protocolo y ejecuta rebalanceos cuando son rentables (cuando el beneficio supera 2x el coste de gas).
+VynX is an automated asset management protocol that allows users to deposit WETH and benefit from intelligent diversification across different lending protocols. The system continuously calculates the best distribution ratios based on the APYs offered by each protocol and executes rebalances when they are profitable (when the profit exceeds 2x the gas cost).
 
-El vault implementa optimizaciones avanzadas como un idle buffer que acumula depositos pequenos para amortizar costes de gas, withdrawal fees para incentivar la tenencia a largo plazo, performance fees con split treasury/founder, cosecha automatica de rewards (AAVE, COMP) con swap a WETH via Uniswap V3, y circuit breakers para proteccion del protocolo.
+The vault implements advanced optimizations such as an idle buffer that accumulates small deposits to amortize gas costs, withdrawal fees to incentivize long-term holding, performance fees with treasury/founder split, automatic reward harvesting (AAVE, COMP) with swap to WETH via Uniswap V3, and circuit breakers for protocol protection.
 
-## Caracteristicas Principales
+## Main Features
 
-- **Vault ERC4626**: Estandar de industria con shares tokenizadas (vynxWETH)
-- **Weighted Allocation**: Distribucion inteligente basada en APY de cada estrategia
-- **Idle Buffer**: Acumula depositos hasta threshold configurable para optimizar gas
-- **Rebalancing Inteligente**: Solo ejecuta cuando `profit_semanal > gas_cost x 2`
-- **Harvest Automatizado**: Cosecha rewards de Aave/Compound, swap via Uniswap V3, reinversion automatica
-- **Performance Fees**: 20% sobre profits, split 80/20 entre treasury y founder
-- **Keeper System**: Keepers oficiales (sin incentivo) y externos (con incentivo en WETH)
-- **Limites de Allocation**: Maximo 50%, minimo 10% por estrategia
-- **Withdrawal Fee**: Configurable sobre retiros
-- **Circuit Breakers**: TVL maximo, deposito minimo
-- **Pausable**: Emergency stop en caso de vulnerabilidades
-- **Integracion con Protocolos Battle-Tested**: Aave v3, Compound v3, Uniswap V3
+- **ERC4626 Vault**: Industry standard with tokenized shares (vynxWETH)
+- **Weighted Allocation**: Intelligent distribution based on each strategy's APY
+- **Idle Buffer**: Accumulates deposits up to a configurable threshold to optimize gas
+- **Intelligent Rebalancing**: Only executes when `profit_semanal > gas_cost x 2`
+- **Automated Harvest**: Harvests rewards from Aave/Compound, swaps via Uniswap V3, automatic reinvestment
+- **Performance Fees**: 20% on profits, split 80/20 between treasury and founder
+- **Keeper System**: Official keepers (no incentive) and external keepers (with WETH incentive)
+- **Allocation Limits**: Maximum 50%, minimum 10% per strategy
+- **Withdrawal Fee**: Configurable on withdrawals
+- **Circuit Breakers**: Maximum TVL, minimum deposit
+- **Pausable**: Emergency stop in case of vulnerabilities
+- **Integration with Battle-Tested Protocols**: Aave v3, Compound v3, Uniswap V3
 
-## Prerrequisitos
+## Prerequisites
 
 - [Foundry](https://book.getfoundry.sh/getting-started/installation) (forge, cast, anvil)
 - Solidity 0.8.33
 - Git
 
-## Instalacion
+## Installation
 
 ```bash
-# Clonar el repositorio
+# Clone the repository
 git clone https://github.com/cristianrisueo/vynx.git
 cd vynx
 
-# Instalar dependencias
+# Install dependencies
 forge install
 
-# Compilar contratos
+# Compile contracts
 forge build
 ```
 
-## Uso Rapido
+## Quick Start
 
 ```solidity
-// 1. Aprobar WETH al vault
+// 1. Approve WETH to the vault
 IERC20(weth).approve(address(vault), amount);
 
-// 2. Depositar WETH y recibir shares
+// 2. Deposit WETH and receive shares
 uint256 shares = vault.deposit(amount, msg.sender);
 
-// 3. Retirar WETH (quema shares, paga withdrawal fee)
+// 3. Withdraw WETH (burns shares, pays withdrawal fee)
 uint256 assets = vault.withdraw(amount, msg.sender, msg.sender);
 ```
 
-## Estructura del Proyecto
+## Project Structure
 
 ```
 vynx/
 ├── src/
 │   ├── core/
-│   │   ├── Vault.sol              # Vault ERC4626 con idle buffer y fees
-│   │   └── StrategyManager.sol    # Motor de allocation y rebalancing
+│   │   ├── Vault.sol              # ERC4626 Vault with idle buffer and fees
+│   │   └── StrategyManager.sol    # Allocation and rebalancing engine
 │   ├── strategies/
-│   │   ├── AaveStrategy.sol       # Integracion Aave v3 + harvest via Uniswap V3
-│   │   └── CompoundStrategy.sol   # Integracion Compound v3 + harvest via Uniswap V3
+│   │   ├── AaveStrategy.sol       # Aave v3 integration + harvest via Uniswap V3
+│   │   └── CompoundStrategy.sol   # Compound v3 integration + harvest via Uniswap V3
 │   └── interfaces/
 │       ├── core/
-│       │   ├── IVault.sol         # Interfaz del vault
-│       │   ├── IStrategyManager.sol # Interfaz del manager
-│       │   └── IStrategy.sol      # Interfaz estandar de estrategias
+│       │   ├── IVault.sol         # Vault interface
+│       │   ├── IStrategyManager.sol # Manager interface
+│       │   └── IStrategy.sol      # Standard strategy interface
 │       └── compound/
-│           ├── ICometMarket.sol   # Interfaz Compound v3 Comet
-│           └── ICometRewards.sol  # Interfaz Compound v3 Rewards
+│           ├── ICometMarket.sol   # Compound v3 Comet interface
+│           └── ICometRewards.sol  # Compound v3 Rewards interface
 ├── test/
-│   ├── unit/                      # Tests unitarios por contrato
-│   ├── integration/               # Tests E2E del protocolo
-│   ├── fuzz/                      # Fuzz tests stateless
-│   └── invariant/                 # Invariant tests stateful
+│   ├── unit/                      # Unit tests per contract
+│   ├── integration/               # E2E protocol tests
+│   ├── fuzz/                      # Stateless fuzz tests
+│   └── invariant/                 # Stateful invariant tests
 ├── script/
-│   ├── Deploy.s.sol               # Script de despliegue en Mainnet
-│   └── run_invariants_offline.sh  # Script para ejecutar invariant tests via Anvil
-├── lib/                           # Dependencias (OpenZeppelin, Aave, Uniswap, Forge)
-├── foundry.toml                   # Configuracion de Foundry
-└── README.md                      # Este archivo
+│   ├── Deploy.s.sol               # Mainnet deployment script
+│   └── run_invariants_offline.sh  # Script to run invariant tests via Anvil
+├── lib/                           # Dependencies (OpenZeppelin, Aave, Uniswap, Forge)
+├── foundry.toml                   # Foundry configuration
+└── README.md                      # This file
 ```
 
 ## Testing
 
-93 tests ejecutados contra fork de Ethereum Mainnet real (sin mocks). Los tests cubren flujos unitarios, integracion end-to-end, fuzz testing stateless e invariant testing stateful.
+93 tests run against a real Ethereum Mainnet fork (no mocks). The tests cover unit flows, end-to-end integration, stateless fuzz testing, and stateful invariant testing.
 
 ```bash
-# Configurar RPC
+# Set up RPC
 export MAINNET_RPC_URL="https://eth-mainnet.g.alchemy.com/v2/<API_KEY>"
 
-# Ejecutar unit + integration + fuzz (93 tests)
+# Run unit + integration + fuzz (93 tests)
 forge test --no-match-path "test/invariant/*" -vv
 
-# Ejecutar invariant tests via Anvil (3 invariantes)
-# Los invariant tests generan un volumen alto de llamadas RPC.
-# El script lanza Anvil como proxy local con rate limiting controlado
+# Run invariant tests via Anvil (3 invariants)
+# Invariant tests generate a high volume of RPC calls.
+# The script launches Anvil as a local proxy with controlled rate limiting
 ./script/run_invariants_offline.sh
 
-# Coverage (excluyendo invariantes)
+# Coverage (excluding invariants)
 forge coverage --no-match-path "test/invariant/*"
 ```
 
-| Capa | Tests | Ficheros |
-|------|-------|----------|
+| Layer | Tests | Files |
+|-------|-------|-------|
 | Unit | 73 | `test/unit/Vault.t.sol`, `test/unit/StrategyManager.t.sol`, `test/unit/AaveStrategy.t.sol`, `test/unit/CompoundStrategy.t.sol` |
 | Integration | 6 | `test/integration/FullFlow.t.sol` |
-| Fuzz | 4 (256 runs c/u) | `test/fuzz/Fuzz.t.sol` |
+| Fuzz | 4 (256 runs each) | `test/fuzz/Fuzz.t.sol` |
 | Invariant | 3 (32 runs x 15 depth) | `test/invariant/Invariants.t.sol` |
 
-### Resultados de Invariant Tests
+### Invariant Test Results
 
-Los invariant tests ejecutan 32 runs con depth 15 (480 llamadas totales) para verificar propiedades criticas del protocolo bajo operaciones aleatorias. Todos los invariantes **PASARON** correctamente:
+The invariant tests run 32 runs with depth 15 (480 total calls) to verify critical protocol properties under random operations. All invariants **PASSED** correctly:
 
-#### `invariant_AccountingIsConsistent()` - Contabilidad Consistente
-Verifica que la suma de assets en estrategias + idle buffer == total reported.
+#### `invariant_AccountingIsConsistent()` - Consistent Accounting
+Verifies that the sum of assets in strategies + idle buffer == total reported.
 
 ```
-✓ PASADO (runs: 32, calls: 480, reverts: 0)
+✓ PASSED (runs: 32, calls: 480, reverts: 0)
 ┌──────────┬──────────┬───────┬─────────┬──────────┐
 │ Contract │ Selector │ Calls │ Reverts │ Discards │
 ├──────────┼──────────┼───────┼─────────┼──────────┤
@@ -133,11 +133,11 @@ Verifica que la suma de assets en estrategias + idle buffer == total reported.
 └──────────┴──────────┴───────┴─────────┴──────────┘
 ```
 
-#### `invariant_SupplyIsCoherent()` - Supply Coherente
-Verifica que totalSupply de shares == suma de balances de usuarios.
+#### `invariant_SupplyIsCoherent()` - Coherent Supply
+Verifies that totalSupply of shares == sum of user balances.
 
 ```
-✓ PASADO (runs: 32, calls: 480, reverts: 0)
+✓ PASSED (runs: 32, calls: 480, reverts: 0)
 ┌──────────┬──────────┬───────┬─────────┬──────────┐
 │ Contract │ Selector │ Calls │ Reverts │ Discards │
 ├──────────┼──────────┼───────┼─────────┼──────────┤
@@ -147,11 +147,11 @@ Verifica que totalSupply de shares == suma de balances de usuarios.
 └──────────┴──────────┴───────┴─────────┴──────────┘
 ```
 
-#### `invariant_VaultIsSolvent()` - Solvencia del Vault
-Verifica que el vault siempre puede cubrir todos los retiros (solvencia total).
+#### `invariant_VaultIsSolvent()` - Vault Solvency
+Verifies that the vault can always cover all withdrawals (total solvency).
 
 ```
-✓ PASADO (runs: 32, calls: 480, reverts: 0)
+✓ PASSED (runs: 32, calls: 480, reverts: 0)
 ┌──────────┬──────────┬───────┬─────────┬──────────┐
 │ Contract │ Selector │ Calls │ Reverts │ Discards │
 ├──────────┼──────────┼───────┼─────────┼──────────┤
@@ -161,11 +161,11 @@ Verifica que el vault siempre puede cubrir todos los retiros (solvencia total).
 └──────────┴──────────┴───────┴─────────┴──────────┘
 ```
 
-**Resultado**: `3 tests passed, 0 failed, 0 skipped` en 86.03s (246.29s CPU time)
+**Result**: `3 tests passed, 0 failed, 0 skipped` in 86.03s (246.29s CPU time)
 
 ### Coverage
 
-| Contrato | Lines | Statements | Branches | Functions |
+| Contract | Lines | Statements | Branches | Functions |
 |----------|-------|------------|----------|-----------|
 | Vault.sol | 95.32% | 92.98% | 76.67% | 100.00% |
 | StrategyManager.sol | 75.57% | 69.53% | 56.41% | 100.00% |
@@ -175,67 +175,67 @@ Verifica que el vault siempre puede cubrir todos los retiros (solvencia total).
 
 ## Deployment
 
-El protocolo se despliega en Ethereum Mainnet. El script detecta automaticamente las direcciones de WETH, Aave v3 Pool, Compound v3 Comet y Uniswap V3 Router.
+The protocol is deployed on Ethereum Mainnet. The script automatically detects the addresses for WETH, Aave v3 Pool, Compound v3 Comet, and Uniswap V3 Router.
 
 ```bash
-# Configurar private key del deployer
+# Set deployer private key
 export PRIVATE_KEY="0x..."
 export MAINNET_RPC_URL="https://eth-mainnet.g.alchemy.com/v2/<API_KEY>"
 
-# Dry-run (simula sin ejecutar)
+# Dry-run (simulates without executing)
 forge script script/Deploy.s.sol --rpc-url $MAINNET_RPC_URL -vvv
 
-# Deploy real
+# Real deploy
 forge script script/Deploy.s.sol --rpc-url $MAINNET_RPC_URL --broadcast --verify
 ```
 
-El deployer queda como owner y fee_receiver. Coste estimado: ~0.012 ETH.
+The deployer is set as owner and fee_receiver. Estimated cost: ~0.012 ETH.
 
-## Documentacion
+## Documentation
 
-- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - Diseno del sistema, diagramas y flujos de datos
-- **[CONTRACTS.md](docs/CONTRACTS.md)** - Especificaciones de contratos, funciones y parametros
-- **[FLOWS.md](docs/FLOWS.md)** - Flujos operativos detallados (deposit, withdraw, harvest, rebalance)
-- **[SECURITY.md](docs/SECURITY.md)** - Consideraciones de seguridad, supuestos de confianza y limitaciones
+- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System design, diagrams, and data flows
+- **[CONTRACTS.md](docs/CONTRACTS.md)** - Contract specifications, functions, and parameters
+- **[FLOWS.md](docs/FLOWS.md)** - Detailed operational flows (deposit, withdraw, harvest, rebalance)
+- **[SECURITY.md](docs/SECURITY.md)** - Security considerations, trust assumptions, and limitations
 
-## Parametros del Protocolo
+## Protocol Parameters
 
-| Parametro | Valor Inicial | Descripcion |
+| Parameter | Initial Value | Description |
 |-----------|--------------|-------------|
-| `idle_threshold` | 10 ETH | Acumulacion minima para auto-allocate |
-| `max_tvl` | 1000 ETH | TVL maximo permitido (circuit breaker) |
-| `min_deposit` | 0.01 ETH | Deposito minimo (anti-spam) |
-| `withdrawal_fee` | 2% (200 bp) | Fee sobre retiros |
-| `performance_fee` | 20% (2000 bp) | Fee sobre profits (80% treasury, 20% founder) |
-| `max_allocation_per_strategy` | 50% (5000 bp) | Allocation maximo por estrategia |
-| `min_allocation_threshold` | 10% (1000 bp) | Allocation minimo por estrategia |
-| `gas_cost_multiplier` | 2x (200) | Margen de seguridad para rebalanceo |
+| `idle_threshold` | 10 ETH | Minimum accumulation for auto-allocate |
+| `max_tvl` | 1000 ETH | Maximum allowed TVL (circuit breaker) |
+| `min_deposit` | 0.01 ETH | Minimum deposit (anti-spam) |
+| `withdrawal_fee` | 2% (200 bp) | Fee on withdrawals |
+| `performance_fee` | 20% (2000 bp) | Fee on profits (80% treasury, 20% founder) |
+| `max_allocation_per_strategy` | 50% (5000 bp) | Maximum allocation per strategy |
+| `min_allocation_threshold` | 10% (1000 bp) | Minimum allocation per strategy |
+| `gas_cost_multiplier` | 2x (200) | Safety margin for rebalancing |
 
-## Consideraciones Educacionales
+## Educational Considerations
 
-Este proyecto es **educacional** y esta construido con:
+This project is **educational** and is built with:
 
-- Codigo production-grade (CEI pattern, SafeERC20, etc.)
-- Comentarios en espanol (intencional)
-- Variables en snake_case (estilo educativo)
-- Arquitectura modular y extensible
-- **NO auditado** - No usar en mainnet con fondos reales
+- Production-grade code (CEI pattern, SafeERC20, etc.)
+- Comments originally written in Spanish, translated to English for this release
+- Variables in snake_case (educational style)
+- Modular and extensible architecture
+- **NOT audited** - Do not use on mainnet with real funds
 
-## Arquitectura de Confianza
+## Trust Architecture
 
-El protocolo confia en:
-- **Aave v3**: Protocolo auditado y battle-tested
-- **Compound v3**: Protocolo auditado y battle-tested
-- **Uniswap V3**: DEX para swap de rewards a WETH
-- **OpenZeppelin**: Contratos estandar de industria (ERC4626, Ownable, Pausable)
+The protocol relies on:
+- **Aave v3**: Audited and battle-tested protocol
+- **Compound v3**: Audited and battle-tested protocol
+- **Uniswap V3**: DEX for swapping rewards to WETH
+- **OpenZeppelin**: Industry standard contracts (ERC4626, Ownable, Pausable)
 
-## Licencia
+## License
 
-MIT License - Ver [LICENSE](LICENSE) para mas detalles
+MIT License - See [LICENSE](LICENSE) for more details
 
 ---
 
-**Autor**: @cristianrisueo
+**Author**: @cristianrisueo
 **Version**: 1.0.0
 **Target Network**: Ethereum Mainnet
 **Solidity**: 0.8.33
