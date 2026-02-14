@@ -169,15 +169,15 @@ contract AaveStrategy is IStrategy {
      * @dev Solo puede ser llamado por el StrategyManager
      * @dev Transfiere los assets retirados directamente a StrategyManager
      * @param assets Cantidad de assets a retirar de Aave
-     * @return actualWithdrawn Assets realmente retirados (incluye yield)
+     * @return actual_withdrawn Assets realmente retirados (incluye yield)
      */
-    function withdraw(uint256 assets) external onlyManager returns (uint256 actualWithdrawn) {
+    function withdraw(uint256 assets) external onlyManager returns (uint256 actual_withdrawn) {
         // Realiza withdraw de Aave (quema aToken, recibe asset + yield). Transfiere a
         // StrategyManager y emite evento. En caso de error revierte
         try aave_pool.withdraw(asset_address, assets, address(this)) returns (uint256 withdrawn) {
-            actualWithdrawn = withdrawn;
-            IERC20(asset_address).safeTransfer(msg.sender, actualWithdrawn);
-            emit Withdrawn(msg.sender, actualWithdrawn, assets);
+            actual_withdrawn = withdrawn;
+            IERC20(asset_address).safeTransfer(msg.sender, actual_withdrawn);
+            emit Withdrawn(msg.sender, actual_withdrawn, assets);
         } catch {
             revert AaveStrategy__WithdrawFailed();
         }
@@ -250,30 +250,30 @@ contract AaveStrategy is IStrategy {
      * @notice Devuelve el APY actual de Aave
      * @dev Convierte de RAY (1e27, unidad interna de Aave) a basis points (1e4)
      *      RAY / 1e23 = basis points
-     * @return apyBasisPoints APY en basis points (350 = 3.5%)
+     * @return apy_basis_points APY en basis points (350 = 3.5%)
      */
-    function apy() external view returns (uint256 apyBasisPoints) {
+    function apy() external view returns (uint256 apy_basis_points) {
         // Obtiene los datos de las reservas del asset en Aave
         DataTypes.ReserveData memory reserve_data = aave_pool.getReserveData(asset_address);
         uint256 liquidity_rate = reserve_data.currentLiquidityRate;
 
         // Devuelve el APY (liquidity rate) casteado a basis points
-        apyBasisPoints = liquidity_rate / 1e23;
+        apy_basis_points = liquidity_rate / 1e23;
     }
 
     /**
      * @notice Devuelve el nombre de la estrategia
-     * @return strategyName Nombre descriptivo de la estrategia
+     * @return strategy_name Nombre descriptivo de la estrategia
      */
-    function name() external pure returns (string memory strategyName) {
+    function name() external pure returns (string memory strategy_name) {
         return "Aave v3 Strategy";
     }
 
     /**
      * @notice Devuelve el address del asset
-     * @return assetAddress Direccion del asset subyacente
+     * @return asset_address Direccion del asset subyacente
      */
-    function asset() external view returns (address assetAddress) {
+    function asset() external view returns (address) {
         return asset_address;
     }
 

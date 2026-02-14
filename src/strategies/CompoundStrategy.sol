@@ -154,9 +154,9 @@ contract CompoundStrategy is IStrategy {
      * @dev Solo puede ser llamado por el StrategyManager
      * @dev Transfiere los assets retirados directamente a StrategyManager
      * @param assets Cantidad de assets a retirar de Compound
-     * @return actualWithdrawn Assets realmente retirados (incluye yield)
+     * @return actual_withdrawn Assets realmente retirados (incluye yield)
      */
-    function withdraw(uint256 assets) external onlyManager returns (uint256 actualWithdrawn) {
+    function withdraw(uint256 assets) external onlyManager returns (uint256 actual_withdrawn) {
         // Balance de assets del contrato antes del withdraw = 0 (todo está en compound)
         uint256 balance_before = IERC20(asset_address).balanceOf(address(this));
 
@@ -164,10 +164,10 @@ contract CompoundStrategy is IStrategy {
         try compound_comet.withdraw(asset_address, assets) {
             // Resta el balance actual de assets (lo realmente retirado de compound) - assets antes del retiro (0)
             // para calcular lo que se ha obtenido realmente de compound (assets puede ser 100, pero perderse 1 wei)
-            actualWithdrawn = IERC20(asset_address).balanceOf(address(this)) - balance_before;
+            actual_withdrawn = IERC20(asset_address).balanceOf(address(this)) - balance_before;
 
-            IERC20(asset_address).safeTransfer(msg.sender, actualWithdrawn);
-            emit Withdrawn(msg.sender, actualWithdrawn, assets);
+            IERC20(asset_address).safeTransfer(msg.sender, actual_withdrawn);
+            emit Withdrawn(msg.sender, actual_withdrawn, assets);
         } catch {
             revert CompoundStrategy__WithdrawFailed();
         }
@@ -237,9 +237,9 @@ contract CompoundStrategy is IStrategy {
      * @notice Devuelve el APY actual de Compound
      * @dev Calcula APY desde el supply rate que devuelve Compound
      * @dev Supply rate esta en por segundo (1e18 base), convertimos a basis points anuales
-     * @return apyBasisPoints APY en basis points (350 = 3.5%)
+     * @return apy_basis_points APY en basis points (350 = 3.5%)
      */
-    function apy() external view returns (uint256 apyBasisPoints) {
+    function apy() external view returns (uint256 apy_basis_points) {
         // Obtiene utilizacion actual del pool
         uint256 utilization = compound_comet.getUtilization();
 
@@ -250,31 +250,31 @@ contract CompoundStrategy is IStrategy {
         // Cast a uint256 para evitar overflow en multiplicacion
         // supply_rate * seconds_per_year / 1e18 * 10000 = basis points
         // Simplificado: (rate * 31536000 * 10000) / 1e18
-        apyBasisPoints = (uint256(supply_rate_per_second) * 315360000000) / 1e18;
+        apy_basis_points = (uint256(supply_rate_per_second) * 315360000000) / 1e18;
     }
 
     /**
      * @notice Devuelve el nombre de la estrategia
-     * @return strategyName Nombre descriptivo de la estrategia
+     * @return strategy_name Nombre descriptivo de la estrategia
      */
-    function name() external pure returns (string memory strategyName) {
+    function name() external pure returns (string memory strategy_name) {
         return "Compound v3 Strategy";
     }
 
     /**
      * @notice Devuelve el address del asset
-     * @return assetAddress Direccion del asset subyacente
+     * @return asset_address Direccion del asset subyacente
      */
-    function asset() external view returns (address assetAddress) {
+    function asset() external view returns (address) {
         return asset_address;
     }
 
     /**
      * @notice Devuelve el supply rate actual de Compound
      * @dev Util para debugging y verificacion de APY
-     * @return rate Supply rate por segundo (base 1e18) convertido a uint256
+     * @return supply_rate Supply rate por segundo (base 1e18) convertido a uint256
      */
-    function getSupplyRate() external view returns (uint256 rate) {
+    function getSupplyRate() external view returns (uint256 supply_rate) {
         return uint256(compound_comet.getSupplyRate(compound_comet.getUtilization()));
     }
 

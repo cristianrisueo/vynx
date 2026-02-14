@@ -333,8 +333,8 @@ uint256 min_amount_out = (claimed * 9900) / 10000;
 uint256 balance_before = IERC20(asset).balanceOf(address(this));
 compound_comet.withdraw(asset, assets);
 uint256 balance_after = IERC20(asset).balanceOf(address(this));
-uint256 actualWithdrawn = balance_after - balance_before;
-// actualWithdrawn puede ser assets - 1 o assets - 2
+uint256 actual_withdrawn = balance_after - balance_before;
+// actual_withdrawn puede ser assets - 1 o assets - 2
 ```
 
 **Tolerancia en Vault:**

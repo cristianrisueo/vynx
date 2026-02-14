@@ -298,8 +298,8 @@ for (uint256 i = 0; i < strategies.length; i++) {
     uint256 to_withdraw = (assets * strategy_balance) / total_assets;
 
     // Captura monto real retirado (rounding de protocolos)
-    uint256 actualWithdrawn = strategy.withdraw(to_withdraw);
-    total_withdrawn += actualWithdrawn;
+    uint256 actual_withdrawn = strategy.withdraw(to_withdraw);
+    total_withdrawn += actual_withdrawn;
 }
 
 IERC20(asset).safeTransfer(receiver, total_withdrawn);
@@ -529,7 +529,7 @@ if (profit < min_profit_for_harvest) return 0;  // 0.1 ETH
 
 // Paga keeper externo (solo si no es oficial)
 uint256 keeper_reward = 0;
-if (!isOfficialKeeper[msg.sender]) {
+if (!is_official_keeper[msg.sender]) {
     keeper_reward = (profit * keeper_incentive) / BASIS_POINTS;  // 1%
     IERC20(asset).safeTransfer(msg.sender, keeper_reward);
 }

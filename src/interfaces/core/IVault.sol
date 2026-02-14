@@ -36,17 +36,17 @@ interface IVault is IERC4626 {
     /**
      * @notice Emitido cuando se ejecuta harvest en el vault recolectando profits de estrategias
      * @param profit Profit total generado en assets antes de deducir performance fees
-     * @param performanceFee Cantidad de performance fee cobrada sobre el profit
+     * @param performance_fee Cantidad de performance fee cobrada sobre el profit
      * @param timestamp Timestamp del momento en que se ejecutó el harvest
      */
-    event Harvested(uint256 profit, uint256 performanceFee, uint256 timestamp);
+    event Harvested(uint256 profit, uint256 performance_fee, uint256 timestamp);
 
     /**
      * @notice Emitido cuando se distribuyen las performance fees entre treasury y founder
-     * @param treasuryAmount Cantidad de assets enviados a la dirección treasury
-     * @param founderAmount Cantidad de assets enviados a la dirección founder
+     * @param treasury_amount Cantidad de assets enviados a la dirección treasury
+     * @param founder_amount Cantidad de assets enviados a la dirección founder
      */
-    event PerformanceFeeDistributed(uint256 treasuryAmount, uint256 founderAmount);
+    event PerformanceFeeDistributed(uint256 treasury_amount, uint256 founder_amount);
 
     /**
      * @notice Emitido cuando se asignan assets idle a las estrategias mediante el strategy manager
@@ -56,58 +56,58 @@ interface IVault is IERC4626 {
 
     /**
      * @notice Emitido cuando se actualiza la dirección del strategy manager
-     * @param newManager Nueva dirección del strategy manager que gestionará las estrategias
+     * @param new_manager Nueva dirección del strategy manager que gestionará las estrategias
      */
-    event StrategyManagerUpdated(address indexed newManager);
+    event StrategyManagerUpdated(address indexed new_manager);
 
     /**
      * @notice Emitido cuando se actualiza el performance fee
-     * @param oldFee Performance fee anterior en basis points
-     * @param newFee Nuevo performance fee en basis points
+     * @param old_fee Performance fee anterior en basis points
+     * @param new_fee Nuevo performance fee en basis points
      */
-    event PerformanceFeeUpdated(uint256 oldFee, uint256 newFee);
+    event PerformanceFeeUpdated(uint256 old_fee, uint256 new_fee);
 
     /**
      * @notice Emitido cuando se actualiza el split de fees entre treasury y founder
-     * @param treasurySplit Nuevo porcentaje para treasury en basis points
-     * @param founderSplit Nuevo porcentaje para founder en basis points
+     * @param treasury_split Nuevo porcentaje para treasury en basis points
+     * @param founder_split Nuevo porcentaje para founder en basis points
      */
-    event FeeSplitUpdated(uint256 treasurySplit, uint256 founderSplit);
+    event FeeSplitUpdated(uint256 treasury_split, uint256 founder_split);
 
     /**
      * @notice Emitido cuando se actualiza el depósito mínimo
-     * @param oldMin Depósito mínimo anterior
-     * @param newMin Nuevo depósito mínimo
+     * @param old_min Depósito mínimo anterior
+     * @param new_min Nuevo depósito mínimo
      */
-    event MinDepositUpdated(uint256 oldMin, uint256 newMin);
+    event MinDepositUpdated(uint256 old_min, uint256 new_min);
 
     /**
      * @notice Emitido cuando se actualiza el idle threshold
-     * @param oldThreshold Threshold anterior
-     * @param newThreshold Nuevo threshold
+     * @param old_threshold Threshold anterior
+     * @param new_threshold Nuevo threshold
      */
-    event IdleThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
+    event IdleThresholdUpdated(uint256 old_threshold, uint256 new_threshold);
 
     /**
      * @notice Emitido cuando se actualiza el TVL máximo
-     * @param oldMax TVL máximo anterior
-     * @param newMax Nuevo TVL máximo
+     * @param old_max TVL máximo anterior
+     * @param new_max Nuevo TVL máximo
      */
-    event MaxTVLUpdated(uint256 oldMax, uint256 newMax);
+    event MaxTVLUpdated(uint256 old_max, uint256 new_max);
 
     /**
      * @notice Emitido cuando se actualiza la dirección del treasury
-     * @param oldTreasury Dirección anterior del treasury
-     * @param newTreasury Nueva dirección del treasury
+     * @param old_treasury Dirección anterior del treasury
+     * @param new_treasury Nueva dirección del treasury
      */
-    event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
+    event TreasuryUpdated(address indexed old_treasury, address indexed new_treasury);
 
     /**
      * @notice Emitido cuando se actualiza la dirección del founder
-     * @param oldFounder Dirección anterior del founder
-     * @param newFounder Nueva dirección del founder
+     * @param old_founder Dirección anterior del founder
+     * @param new_founder Nueva dirección del founder
      */
-    event FounderUpdated(address indexed oldFounder, address indexed newFounder);
+    event FounderUpdated(address indexed old_founder, address indexed new_founder);
 
     /**
      * @notice Emitido cuando se añade o remueve un keeper oficial
@@ -118,17 +118,17 @@ interface IVault is IERC4626 {
 
     /**
      * @notice Emitido cuando se actualiza el profit mínimo para harvest
-     * @param oldMin Profit mínimo anterior
-     * @param newMin Nuevo profit mínimo
+     * @param old_min Profit mínimo anterior
+     * @param new_min Nuevo profit mínimo
      */
-    event MinProfitForHarvestUpdated(uint256 oldMin, uint256 newMin);
+    event MinProfitForHarvestUpdated(uint256 old_min, uint256 new_min);
 
     /**
      * @notice Emitido cuando se actualiza el incentivo para keepers externos
-     * @param oldIncentive Incentivo anterior en basis points
-     * @param newIncentive Nuevo incentivo en basis points
+     * @param old_incentive Incentivo anterior en basis points
+     * @param new_incentive Nuevo incentivo en basis points
      */
-    event KeeperIncentiveUpdated(uint256 oldIncentive, uint256 newIncentive);
+    event KeeperIncentiveUpdated(uint256 old_incentive, uint256 new_incentive);
 
     //* Funciones principales
 
@@ -158,74 +158,74 @@ interface IVault is IERC4626 {
     /**
      * @notice Actualiza el performance fee cobrado sobre profits
      * @dev Solo puede ser llamada por el owner del vault
-     * @param newFee Nuevo performance fee en basis points (debe ser <= BASIS_POINTS)
+     * @param new_fee Nuevo performance fee en basis points (debe ser <= BASIS_POINTS)
      */
-    function setPerformanceFee(uint256 newFee) external;
+    function setPerformanceFee(uint256 new_fee) external;
 
     /**
      * @notice Actualiza el split de performance fees entre treasury y founder
      * @dev Solo puede ser llamada por el owner del vault
-     * @param newTreasury Nuevo porcentaje para treasury en basis points
-     * @param newFounder Nuevo porcentaje para founder en basis points
+     * @param new_treasury Nuevo porcentaje para treasury en basis points
+     * @param new_founder Nuevo porcentaje para founder en basis points
      * @dev La suma de ambos debe ser exactamente BASIS_POINTS (10000)
      */
-    function setFeeSplit(uint256 newTreasury, uint256 newFounder) external;
+    function setFeeSplit(uint256 new_treasury, uint256 new_founder) external;
 
     /**
      * @notice Actualiza el depósito mínimo permitido
      * @dev Solo puede ser llamada por el owner del vault
-     * @param newMin Nuevo depósito mínimo en assets
+     * @param new_min Nuevo depósito mínimo en assets
      */
-    function setMinDeposit(uint256 newMin) external;
+    function setMinDeposit(uint256 new_min) external;
 
     /**
      * @notice Actualiza el threshold de assets idle para ejecutar allocation
      * @dev Solo puede ser llamada por el owner del vault
-     * @param newThreshold Nuevo threshold en assets
+     * @param new_threshold Nuevo threshold en assets
      */
-    function setIdleThreshold(uint256 newThreshold) external;
+    function setIdleThreshold(uint256 new_threshold) external;
 
     /**
      * @notice Actualiza el TVL máximo permitido en el vault
      * @dev Solo puede ser llamada por el owner del vault
-     * @param newMax Nuevo TVL máximo en assets
+     * @param new_max Nuevo TVL máximo en assets
      */
-    function setMaxTVL(uint256 newMax) external;
+    function setMaxTVL(uint256 new_max) external;
 
     /**
      * @notice Actualiza la dirección del treasury
      * @dev Solo puede ser llamada por el owner del vault
-     * @param newTreasury Nueva dirección del treasury (no puede ser address(0))
+     * @param new_treasury Nueva dirección del treasury (no puede ser address(0))
      */
-    function setTreasury(address newTreasury) external;
+    function setTreasury(address new_treasury) external;
 
     /**
      * @notice Actualiza la dirección del founder
      * @dev Solo puede ser llamada por el owner del vault
-     * @param newFounder Nueva dirección del founder (no puede ser address(0))
+     * @param new_founder Nueva dirección del founder (no puede ser address(0))
      */
-    function setFounder(address newFounder) external;
+    function setFounder(address new_founder) external;
 
     /**
      * @notice Actualiza la dirección del strategy manager
      * @dev Solo puede ser llamada por el owner del vault
-     * @param newManager Nueva dirección del strategy manager (no puede ser address(0))
+     * @param new_manager Nueva dirección del strategy manager (no puede ser address(0))
      */
-    function setStrategyManager(address newManager) external;
+    function setStrategyManager(address new_manager) external;
 
     /**
      * @notice Actualiza el profit mínimo requerido para ejecutar harvest
      * @dev Solo puede ser llamada por el owner del vault
-     * @param newMin Nuevo profit mínimo en assets
+     * @param new_min Nuevo profit mínimo en assets
      */
-    function setMinProfitForHarvest(uint256 newMin) external;
+    function setMinProfitForHarvest(uint256 new_min) external;
 
     /**
      * @notice Actualiza el incentivo para keepers externos que ejecuten harvest
      * @dev Solo puede ser llamada por el owner del vault
-     * @param newIncentive Nuevo incentivo en basis points (debe ser <= BASIS_POINTS)
+     * @param new_incentive Nuevo incentivo en basis points (debe ser <= BASIS_POINTS)
      */
-    function setKeeperIncentive(uint256 newIncentive) external;
+    function setKeeperIncentive(uint256 new_incentive) external;
 
     //* Funciones de consulta - Getters de parámetros y treaury del protocolo
 
@@ -233,31 +233,31 @@ interface IVault is IERC4626 {
      * @notice Devuelve el porcentaje de performance fee cobrado sobre profits generados (yield)
      * @dev En basis points: 100 = 1%, 1000 = 10%. Este fee se cobra sobre el profit generado
      *      por las estrategias en cada harvest y se distribuye entre treasury y founder
-     * @return feeBps Performance fee en basis points
+     * @return fee_bps Performance fee en basis points
      */
-    function performanceFee() external view returns (uint256 feeBps);
+    function performance_fee() external view returns (uint256 fee_bps);
 
     /**
      * @notice Porcentaje del performance fee asignado al treasury
      * @dev En basis points sobre el total del performance fee (no sobre el profit total).
-     * @return splitBps Split del treasury en basis points (debe sumar BASIS_POINTS con founderSplit)
+     * @return split_bps Split del treasury en basis points (debe sumar BASIS_POINTS con founder_split)
      */
-    function treasurySplit() external view returns (uint256 splitBps);
+    function treasury_split() external view returns (uint256 split_bps);
 
     /**
      * @notice Devuelve el porcentaje del performance fee asignado al founder
      * @dev En basis points sobre el total del performance fee (no sobre el profit total).
-     * @return splitBps Split del founder en basis points (debe sumar BASIS_POINTS con treasurySplit)
+     * @return split_bps Split del founder en basis points (debe sumar BASIS_POINTS con treasury_split)
      */
-    function founderSplit() external view returns (uint256 splitBps);
+    function founder_split() external view returns (uint256 split_bps);
 
     /**
      * @notice Devuelve el depósito mínimo permitido en el vault
      * @dev Previene deposits extremadamente pequeños que no sean económicamente eficientes
      *      debido al coste de gas. Los deposits menores a este threshold serán revertidos
-     * @return minAmount Cantidad mínima de assets para un depósito válido
+     * @return min_amount Cantidad mínima de assets para un depósito válido
      */
-    function minDeposit() external view returns (uint256 minAmount);
+    function minDeposit() external view returns (uint256 min_amount);
 
     /**
      * @notice Devuelve la límite de assets en el idle buffer requerido para ejecutar allocateIdle()
@@ -273,33 +273,33 @@ interface IVault is IERC4626 {
      * @dev Límite de seguridad para prevenir riesgo excesivo en fase temprana. Los deposits que
      *      excedan este límite serán revertidos, protegiendo el protocolo mientras se demuestra
      *      su robustez. Se puede incrementar progresivamente según madurez del protocolo
-     * @return maxTvl TVL máximo permitido en assets
+     * @return max_tvl TVL máximo permitido en assets
      */
-    function maxTVL() external view returns (uint256 maxTvl);
+    function maxTVL() external view returns (uint256 max_tvl);
 
     /**
      * @notice Devuelve la dirección del treasury del protocolo
-     * @dev El treasury recibe su porcentaje (treasurySplit) de las performance fees generadas.
+     * @dev El treasury recibe su porcentaje (treasury_split) de las performance fees generadas.
      *      Estos fondos se usan típicamente para desarrollo, seguridad y crecimiento del protocolo
-     * @return treasuryAddress Dirección del treasury que recibe performance fees
+     * @return treasury_address Dirección del treasury que recibe performance fees
      */
-    function treasury() external view returns (address treasuryAddress);
+    function treasury() external view returns (address treasury_address);
 
     /**
      * @notice Devuelve la dirección del founder o equipo del protocolo
-     * @dev El founder recibe su porcentaje (founderSplit) de las performance fees generadas.
+     * @dev El founder recibe su porcentaje (founder_split) de las performance fees generadas.
      *      Es la recompensa por el desarrollo y mantenimiento del protocolo
-     * @return founderAddress Dirección del founder que recibe performance fees
+     * @return founder_address Dirección del founder que recibe performance fees
      */
-    function founder() external view returns (address founderAddress);
+    function founder() external view returns (address founder_address);
 
     /**
      * @notice Devuelve la dirección del strategy manager que gestiona las estrategias
      * @dev El strategy manager es el contrato responsable de allocation, rebalancing y harvest
      *      de todas las estrategias. El vault delega toda la gestión de capital a este contrato
-     * @return managerAddress Dirección del contrato strategy manager
+     * @return manager_address Dirección del contrato strategy manager
      */
-    function strategyManager() external view returns (address managerAddress);
+    function strategyManager() external view returns (address manager_address);
 
     /**
      * @notice Devuelve el balance de assets idle aún no asignados a estrategias
@@ -307,9 +307,9 @@ interface IVault is IERC4626 {
      *      Se acumula por deposits de usuarios y se reduce mediante allocateIdle() cuando alcanza
      *      el idleThreshold. Mantener un buffer permite withdrawals rápidos sin retirar de estrategias
      *      y ahorrar mucho gas al no hacer depósitos de usuarios inmediatos en los protocolos
-     * @return idleBalance Balance actual de assets idle buffer en el vault
+     * @return idle_balance Balance actual de assets idle buffer en el vault
      */
-    function idleBuffer() external view returns (uint256 idleBalance);
+    function idleBuffer() external view returns (uint256 idle_balance);
 
     /**
      * @notice Devuelve el timestamp del último harvest ejecutado
@@ -323,31 +323,31 @@ interface IVault is IERC4626 {
      * @notice Devuelve el profit total acumulado desde el inicio del vault
      * @dev Suma de todos los profits cosechados a lo largo de la vida del vault, sin deducir fees.
      *      Representa el yield bruto generado por todas las estrategias antes de performance fees
-     * @return totalProfit Profit total acumulado en assets desde el deploy del vault
+     * @return total_profit Profit total acumulado en assets desde el deploy del vault
      */
-    function totalHarvested() external view returns (uint256 totalProfit);
+    function totalHarvested() external view returns (uint256 total_profit);
 
     /**
      * @notice Devuelve si una direccion es keeper oficial del protocolo
      * @dev Los keepers oficiales no reciben incentivo al ejecutar harvest
      * @param keeper Address a comprobar
-     * @return isOfficial True si es keeper oficial, false en caso contrario
+     * @return is_official True si es keeper oficial, false en caso contrario
      */
-    function isOfficialKeeper(address keeper) external view returns (bool isOfficial);
+    function is_official_keeper(address keeper) external view returns (bool is_official);
 
     /**
      * @notice Devuelve el profit mínimo requerido para ejecutar harvest
      * @dev Previene harvests no rentables donde el gas cost excede el profit generado.
      *      Solo se ejecutará harvest si el profit total es mayor o igual a este threshold
-     * @return minProfit Profit mínimo en assets para ejecutar harvest
+     * @return min_profit Profit mínimo en assets para ejecutar harvest
      */
-    function minProfitForHarvest() external view returns (uint256 minProfit);
+    function minProfitForHarvest() external view returns (uint256 min_profit);
 
     /**
      * @notice Devuelve el porcentaje de incentivo para keepers externos
      * @dev En basis points sobre el profit total. Los keepers externos que ejecuten harvest
      *      reciben este porcentaje como recompensa. Los keepers oficiales no reciben incentivo
-     * @return incentiveBps Incentivo para keepers en basis points
+     * @return incentive_bps Incentivo para keepers en basis points
      */
-    function keeperIncentive() external view returns (uint256 incentiveBps);
+    function keeperIncentive() external view returns (uint256 incentive_bps);
 }

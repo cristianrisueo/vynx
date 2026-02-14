@@ -50,9 +50,9 @@ interface IStrategy {
      * @dev Transfiere assets al caller después de retirar, es el flujo contrario a deposit:
      *      Los assets ya convertidos pasan de estrategia correspondiente a strategy manager
      * @param assets Cantidad de assets a retirar
-     * @return actualWithdrawn assets realmente retirados (cantidad a retirar + yield generado)
+     * @return actual_withdrawn assets realmente retirados (cantidad a retirar + yield generado)
      */
-    function withdraw(uint256 assets) external returns (uint256 actualWithdrawn);
+    function withdraw(uint256 assets) external returns (uint256 actual_withdrawn);
 
     /**
      * @notice Cosecha las rewards del protocolo subyacente. Se hace continuamente para maximizar APY
@@ -77,19 +77,19 @@ interface IStrategy {
     /**
      * @notice Devuelve el APY actual del protocolo subyacente
      * @dev En basis points: 100 = 1%, 350 = 3.5%, 1000 = 10%
-     * @return apyBasisPoints APY en basis points
+     * @return apy_basis_points APY en basis points
      */
-    function apy() external view returns (uint256 apyBasisPoints);
+    function apy() external view returns (uint256 apy_basis_points);
 
     /**
      * @notice Devuelve el nombre de la estrategia
-     * @return strategyName Ej: "Aave v3 assets Strategy"
+     * @return strategy_name Ej: "Aave v3 assets Strategy"
      */
-    function name() external view returns (string memory strategyName);
+    function name() external view returns (string memory strategy_name);
 
     /**
      * @notice Devuelve la dirección del asset que maneja
-     * @return assetAddress Dirección del token usado como underlying asset
+     * @return asset_address Dirección del token usado como underlying asset
      */
-    function asset() external view returns (address assetAddress);
+    function asset() external view returns (address asset_address);
 }

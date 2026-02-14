@@ -432,7 +432,7 @@ contract VaultTest is Test {
         assertEq(vault.performance_fee(), 1500);
         assertEq(vault.treasury_split(), 7000);
         assertEq(vault.founder_split(), 3000);
-        assertTrue(vault.isOfficialKeeper(alice));
+        assertTrue(vault.is_official_keeper(alice));
         assertEq(vault.min_profit_for_harvest(), 0.5 ether);
         assertEq(vault.keeper_incentive(), 200);
     }

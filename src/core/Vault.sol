@@ -93,7 +93,7 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
     address public strategy_manager;
 
     /// @notice Mapeo de keepers oficiales del protocolo (no reciben incentivo)
-    mapping(address => bool) public isOfficialKeeper;
+    mapping(address => bool) public is_official_keeper;
 
     /// @notice Direccion del treasury que recibe su parte de performance fees
     address public treasury_address;
@@ -353,7 +353,7 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
 
         // Calcula y paga incentivo solo si el caller no es keeper oficial
         uint256 keeper_reward = 0;
-        if (!isOfficialKeeper[msg.sender]) {
+        if (!is_official_keeper[msg.sender]) {
             // Calcula el keeper reward
             keeper_reward = (profit * keeper_incentive) / BASIS_POINTS;
 
@@ -522,7 +522,7 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
      * @param status True para añadir, false para remover
      */
     function setOfficialKeeper(address keeper, bool status) external onlyOwner {
-        isOfficialKeeper[keeper] = status;
+        is_official_keeper[keeper] = status;
         emit OfficialKeeperUpdated(keeper, status);
     }
 
@@ -575,33 +575,33 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
 
     /**
      * @notice Devuelve el performance fee actual
-     * @return feeBps Performance fee en basis points
+     * @return fee_bps Performance fee en basis points
      */
-    function performanceFee() external view returns (uint256 feeBps) {
+    function performanceFee() external view returns (uint256 fee_bps) {
         return performance_fee;
     }
 
     /**
      * @notice Devuelve el treasury split actual
-     * @return splitBps Treasury split en basis points
+     * @return split_bps Treasury split en basis points
      */
-    function treasurySplit() external view returns (uint256 splitBps) {
+    function treasurySplit() external view returns (uint256 split_bps) {
         return treasury_split;
     }
 
     /**
      * @notice Devuelve el founder split actual
-     * @return splitBps Founder split en basis points
+     * @return split_bps Founder split en basis points
      */
-    function founderSplit() external view returns (uint256 splitBps) {
+    function founderSplit() external view returns (uint256 split_bps) {
         return founder_split;
     }
 
     /**
      * @notice Devuelve el deposito minimo actual
-     * @return minAmount Deposito minimo en assets
+     * @return min_amount Deposito minimo en assets
      */
-    function minDeposit() external view returns (uint256 minAmount) {
+    function minDeposit() external view returns (uint256 min_amount) {
         return min_deposit;
     }
 
@@ -615,41 +615,41 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
 
     /**
      * @notice Devuelve el TVL maximo actual
-     * @return maxTvl TVL maximo en assets
+     * @return max_tvl TVL maximo en assets
      */
-    function maxTVL() external view returns (uint256 maxTvl) {
+    function maxTVL() external view returns (uint256) {
         return max_tvl;
     }
 
     /**
      * @notice Devuelve la direccion del treasury
-     * @return treasuryAddress Direccion del treasury
+     * @return treasury_address Direccion del treasury
      */
-    function treasury() external view returns (address treasuryAddress) {
+    function treasury() external view returns (address) {
         return treasury_address;
     }
 
     /**
      * @notice Devuelve la direccion del founder
-     * @return founderAddress Direccion del founder
+     * @return founder_address Direccion del founder
      */
-    function founder() external view returns (address founderAddress) {
+    function founder() external view returns (address) {
         return founder_address;
     }
 
     /**
      * @notice Devuelve la direccion del strategy manager
-     * @return managerAddress Direccion del strategy manager
+     * @return manager_address Direccion del strategy manager
      */
-    function strategyManager() external view returns (address managerAddress) {
+    function strategyManager() external view returns (address) {
         return strategy_manager;
     }
 
     /**
      * @notice Devuelve el balance de idle buffer actual
-     * @return idleBalance Balance de assets idle
+     * @return idle_balance Balance de assets idle
      */
-    function idleBuffer() external view returns (uint256 idleBalance) {
+    function idleBuffer() external view returns (uint256) {
         return idle_buffer;
     }
 
@@ -663,25 +663,25 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
 
     /**
      * @notice Devuelve el profit total acumulado
-     * @return totalProfit Profit total desde el inicio
+     * @return total_profit Profit total desde el inicio
      */
-    function totalHarvested() external view returns (uint256 totalProfit) {
+    function totalHarvested() external view returns (uint256 total_profit) {
         return total_harvested;
     }
 
     /**
      * @notice Devuelve el profit minimo requerido para ejecutar harvest
-     * @return minProfit Profit minimo en assets
+     * @return min_profit Profit minimo en assets
      */
-    function minProfitForHarvest() external view returns (uint256 minProfit) {
+    function minProfitForHarvest() external view returns (uint256 min_profit) {
         return min_profit_for_harvest;
     }
 
     /**
      * @notice Devuelve el incentivo para keepers externos
-     * @return incentiveBps Incentivo en basis points
+     * @return incentive_bps Incentivo en basis points
      */
-    function keeperIncentive() external view returns (uint256 incentiveBps) {
+    function keeperIncentive() external view returns (uint256 incentive_bps) {
         return keeper_incentive;
     }
 

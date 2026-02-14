@@ -97,7 +97,7 @@ contract StrategyManager is IStrategyManager, Ownable {
     mapping(address => bool) public is_strategy;
 
     /// @notice Target allocation para las estrategias, en basis points (10000 = 100%)
-    mapping(IStrategy => uint256) public targetAllocation;
+    mapping(IStrategy => uint256) public target_allocation;
 
     /// @notice Direccion del asset subyacente del protocolo
     address public immutable asset;
@@ -179,7 +179,7 @@ contract StrategyManager is IStrategyManager, Ownable {
         for (uint256 i = 0; i < strategies.length; i++) {
             // Obtiene la estrategia y su target allocation
             IStrategy strategy = strategies[i];
-            uint256 target = targetAllocation[strategy];
+            uint256 target = target_allocation[strategy];
 
             // Si la estrategia tiene allocation > 0, deposita proporcionalmente
             if (target > 0) {
@@ -312,7 +312,7 @@ contract StrategyManager is IStrategyManager, Ownable {
 
             // Obtiene su balance actual y su balance target (el que deberia tener) basado en allocation
             uint256 current_balance = strategy.totalAssets();
-            uint256 target_balance = (total_tvl * targetAllocation[strategy]) / BASIS_POINTS;
+            uint256 target_balance = (total_tvl * target_allocation[strategy]) / BASIS_POINTS;
 
             // Si tiene exceso de fondos: Añade estrategia y exceso a arrays de tracking y aumenta count
             if (current_balance > target_balance) {
@@ -407,19 +407,19 @@ contract StrategyManager is IStrategyManager, Ownable {
 
         // Obtiene la estrategia en ese indice, y de la estrategia su address
         IStrategy strategy = strategies[index];
-        address strategyAddress = address(strategy);
+        address strategy_address = address(strategy);
 
         // Comprueba que la estrategia no tenga assets bajo gestion (previene la pérdida de fondos)
         if (strategy.totalAssets() > 0) revert StrategyManager__StrategyHasAssets();
 
         // Elimina el allocation (% del TVL) de esta estrategia antes de eliminarla
-        delete targetAllocation[strategy];
+        delete target_allocation[strategy];
 
         // Elimina la estrategia del array y su address del mapping de verificacion rapida
         // Utiliza la estrategia swap&pop porque ahorra gas (creo que se llamaba asi)
         strategies[index] = strategies[strategies.length - 1];
         strategies.pop();
-        is_strategy[strategyAddress] = false;
+        is_strategy[strategy_address] = false;
 
         // Recalcula allocations para el resto de estrategias. Como hemos eliminado
         // esta estrategia, su allocation (% TVL) esta disponible para las otras
@@ -428,7 +428,7 @@ contract StrategyManager is IStrategyManager, Ownable {
         }
 
         // Emite evento de estrategia eliminada
-        emit StrategyRemoved(strategyAddress);
+        emit StrategyRemoved(strategy_address);
     }
 
     //* Setters de parametros
@@ -550,7 +550,7 @@ contract StrategyManager is IStrategyManager, Ownable {
             names[i] = strategies[i].name();
             apys[i] = strategies[i].apy();
             tvls[i] = strategies[i].totalAssets();
-            targets[i] = targetAllocation[strategies[i]];
+            targets[i] = target_allocation[strategies[i]];
         }
     }
 
@@ -643,7 +643,7 @@ contract StrategyManager is IStrategyManager, Ownable {
 
         // Escribe los targets calculados al storage (el mapping)
         for (uint256 i = 0; i < strategies.length; i++) {
-            targetAllocation[strategies[i]] = computed_allocations[i];
+            target_allocation[strategies[i]] = computed_allocations[i];
         }
 
         // Emite evento de targets allocations actualizados

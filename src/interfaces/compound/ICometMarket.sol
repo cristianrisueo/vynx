@@ -41,9 +41,9 @@ interface ICometMarket {
      * @dev Supply rate es el interés que reciben los suppliers, calculado en base a utilization
      *      Cuanto más utilizado más reciben los suppliers porque -liquidez y +necesidad tiene el pool
      * @param utilization Utilización actual del pool
-     * @return rate Supply rate (base 1e18)
+     * @return supply_rate Supply rate (base 1e18)
      */
-    function getSupplyRate(uint256 utilization) external view returns (uint64 rate);
+    function getSupplyRate(uint256 utilization) external view returns (uint64 supply_rate);
 
     /**
      * @notice Devuelve la utilización actual del pool

@@ -24,17 +24,17 @@ interface IStrategyManager {
 
     /**
      * @notice Emitido cuando se rebalancea capital entre dos estrategias
-     * @param fromStrategy Estrategia origen desde donde se retiran los assets
-     * @param toStrategy Estrategia destino hacia donde se mueven los assets
+     * @param from_strategy Estrategia origen desde donde se retiran los assets
+     * @param to_strategy Estrategia destino hacia donde se mueven los assets
      * @param assets Cantidad de assets rebalanceados entre estrategias
      */
-    event Rebalanced(address indexed fromStrategy, address indexed toStrategy, uint256 assets);
+    event Rebalanced(address indexed from_strategy, address indexed to_strategy, uint256 assets);
 
     /**
      * @notice Emitido cuando se ejecuta harvest en todas las estrategias activas
-     * @param totalProfit Profit total generado en assets sumando todas las estrategias
+     * @param total_profit Profit total generado en assets sumando todas las estrategias
      */
-    event Harvested(uint256 totalProfit);
+    event Harvested(uint256 total_profit);
 
     /**
      * @notice Emitido cuando se añade una nueva estrategia al pool de estrategias disponibles
@@ -102,9 +102,9 @@ interface IStrategyManager {
      * @notice Ejecuta harvest en todas las estrategias activas del protocolo
      * @dev Itera sobre cada estrategia llamando a su función harvest(), recolecta todos los rewards,
      *      los convierte a asset base y reinvierte automáticamente para maximizar APY compuesto
-     * @return totalProfit Profit total generado en assets (WETH) sumando todas las estrategias
+     * @return total_profit Profit total generado en assets (WETH) sumando todas las estrategias
      */
-    function harvest() external returns (uint256 totalProfit);
+    function harvest() external returns (uint256 total_profit);
 
     //* Funciones de gestión de estrategias (onlyOwner)
 
@@ -167,22 +167,22 @@ interface IStrategyManager {
      * @dev El target allocation se calcula dinámicamente en base al APY de cada estrategia.
      *      Estrategias con mayor APY reciben mayor porcentaje del capital total
      * @param strategy Dirección de la estrategia a consultar
-     * @return allocationBps Target allocation en basis points (100 = 1%, 1000 = 10%, 10000 = 100%)
+     * @return allocation_bps Target allocation en basis points (100 = 1%, 1000 = 10%, 10000 = 100%)
      */
-    function targetAllocation(IStrategy strategy) external view returns (uint256 allocationBps);
+    function target_allocation(IStrategy strategy) external view returns (uint256 allocation_bps);
 
     /**
      * @notice Devuelve la dirección del vault principal del protocolo
      * @dev El vault es el contrato que interactúa directamente con los usuarios (hasta que llegue el router)
      *      y delega a gestión de assets al strategy manager. Es el punto de entrada de deposits/withdrawals
-     * @return vaultAddress Dirección del contrato vault
+     * @return vault_address Dirección del contrato vault
      */
-    function vault() external view returns (address vaultAddress);
+    function vault() external view returns (address vault_address);
 
     /**
      * @notice Devuelve la dirección del underlying asset que gestiona el protocolo
      * @dev Todas las estrategias deben usar este mismo asset
-     * @return assetAddress Dirección del token usado como underlying asset
+     * @return asset_address Dirección del token usado como underlying asset
      */
-    function asset() external view returns (address assetAddress);
+    function asset() external view returns (address asset_address);
 }

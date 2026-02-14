@@ -40,7 +40,7 @@ uint256 public constant BASIS_POINTS = 10000;       // 100% = 10000 basis points
 address public strategy_manager;                      // Motor de allocation y harvest
 
 // Keeper system
-mapping(address => bool) public isOfficialKeeper;    // Keepers oficiales (sin incentivo)
+mapping(address => bool) public is_official_keeper;    // Keepers oficiales (sin incentivo)
 
 // Direcciones de fee recipients
 address public treasury_address;                      // Recibe 80% perf fee en SHARES
@@ -298,20 +298,20 @@ function setKeeperIncentive(uint256 new_incentive) external onlyOwner
 ```solidity
 event Deposited(address indexed user, uint256 assets, uint256 shares);
 event Withdrawn(address indexed user, uint256 assets, uint256 shares);
-event Harvested(uint256 profit, uint256 performanceFee, uint256 timestamp);
-event PerformanceFeeDistributed(uint256 treasuryAmount, uint256 founderAmount);
+event Harvested(uint256 profit, uint256 performance_fee, uint256 timestamp);
+event PerformanceFeeDistributed(uint256 treasury_amount, uint256 founder_amount);
 event IdleAllocated(uint256 amount);
-event StrategyManagerUpdated(address indexed newManager);
-event PerformanceFeeUpdated(uint256 oldFee, uint256 newFee);
-event FeeSplitUpdated(uint256 treasurySplit, uint256 founderSplit);
-event MinDepositUpdated(uint256 oldMin, uint256 newMin);
-event IdleThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
-event MaxTVLUpdated(uint256 oldMax, uint256 newMax);
-event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
-event FounderUpdated(address indexed oldFounder, address indexed newFounder);
+event StrategyManagerUpdated(address indexed new_manager);
+event PerformanceFeeUpdated(uint256 old_fee, uint256 new_fee);
+event FeeSplitUpdated(uint256 treasury_split, uint256 founder_split);
+event MinDepositUpdated(uint256 old_min, uint256 new_min);
+event IdleThresholdUpdated(uint256 old_threshold, uint256 new_threshold);
+event MaxTVLUpdated(uint256 old_max, uint256 new_max);
+event TreasuryUpdated(address indexed old_treasury, address indexed new_treasury);
+event FounderUpdated(address indexed old_founder, address indexed new_founder);
 event OfficialKeeperUpdated(address indexed keeper, bool status);
-event MinProfitForHarvestUpdated(uint256 oldMin, uint256 newMin);
-event KeeperIncentiveUpdated(uint256 oldIncentive, uint256 newIncentive);
+event MinProfitForHarvestUpdated(uint256 old_min, uint256 new_min);
+event KeeperIncentiveUpdated(uint256 old_incentive, uint256 new_incentive);
 ```
 
 ### Errores Custom
@@ -367,7 +367,7 @@ address public vault;                                        // Vault autorizado
 // Estrategias disponibles
 IStrategy[] public strategies;
 mapping(address => bool) public is_strategy;
-mapping(IStrategy => uint256) public targetAllocation;       // En basis points
+mapping(IStrategy => uint256) public target_allocation;       // En basis points
 
 // Parámetros de allocation
 uint256 public max_allocation_per_strategy = 5000;           // 50%
@@ -391,7 +391,7 @@ Distribuye WETH entre estrategias según target allocation.
 2. Llama `_calculateTargetAllocation()`:
    - Obtiene APY de cada estrategia
    - Calcula targets usando `_computeTargets()` (weighted allocation)
-   - Escribe targets al storage: `targetAllocation[strategy] = target`
+   - Escribe targets al storage: `target_allocation[strategy] = target`
 3. Para cada estrategia con `target > 0`:
    - Calcula `amount = (assets * target) / BASIS_POINTS`
    - Transfiere `amount` WETH a la estrategia
@@ -423,13 +423,13 @@ Retira WETH de estrategias proporcionalmente y transfiere al receiver.
    - Obtiene `strategy_balance = strategy.totalAssets()`
    - Si `strategy_balance == 0`, continúa
    - Calcula proporcional: `to_withdraw = (assets * strategy_balance) / total_assets`
-   - Llama `strategy.withdraw(to_withdraw)` → captura `actualWithdrawn`
-   - Acumula `total_withdrawn += actualWithdrawn`
+   - Llama `strategy.withdraw(to_withdraw)` → captura `actual_withdrawn`
+   - Acumula `total_withdrawn += actual_withdrawn`
 5. Transfiere `total_withdrawn` WETH del manager al receiver
 
 **Modificadores**: `onlyVault`
 
-**Nota**: Retira proporcionalmente para mantener ratios. NO recalcula target allocation (ahorro de gas). Usa `actualWithdrawn` para contabilizar rounding de protocolos externos.
+**Nota**: Retira proporcionalmente para mantener ratios. NO recalcula target allocation (ahorro de gas). Usa `actual_withdrawn` para contabilizar rounding de protocolos externos.
 
 **Ejemplo:**
 ```solidity
@@ -549,7 +549,7 @@ Remueve estrategia del manager por índice.
 
 **Flujo:**
 1. Verifica que estrategia en `index` tenga `totalAssets() == 0`
-2. Elimina target: `delete targetAllocation[strategies[index]]`
+2. Elimina target: `delete target_allocation[strategies[index]]`
 3. Swap & pop: `strategies[index] = strategies[length-1]; strategies.pop()`
 4. Marca como no existente: `is_strategy[strategy] = false`
 5. Recalcula targets para estrategias restantes
@@ -592,7 +592,7 @@ Calcula targets y escribe a storage.
 **Flujo:**
 1. Si no hay estrategias: retorna
 2. Llama `_computeTargets()` para obtener array de targets
-3. Escribe a storage: `targetAllocation[strategies[i]] = computed[i]`
+3. Escribe a storage: `target_allocation[strategies[i]] = computed[i]`
 4. Emite `TargetAllocationUpdated()`
 
 ---
@@ -642,8 +642,8 @@ function setMinAllocationThreshold(uint256 new_min) external onlyOwner
 
 ```solidity
 event Allocated(address indexed strategy, uint256 assets);
-event Rebalanced(address indexed fromStrategy, address indexed toStrategy, uint256 assets);
-event Harvested(uint256 totalProfit);
+event Rebalanced(address indexed from_strategy, address indexed to_strategy, uint256 assets);
+event Harvested(uint256 total_profit);
 event StrategyAdded(address indexed strategy);
 event StrategyRemoved(address indexed strategy);
 event TargetAllocationUpdated();
@@ -737,15 +737,15 @@ Deposita WETH en Aave v3.
 
 ---
 
-#### withdraw(uint256 assets) → uint256 actualWithdrawn
+#### withdraw(uint256 assets) → uint256 actual_withdrawn
 
 Retira WETH de Aave v3.
 
 **Flujo:**
 1. Llama `aave_pool.withdraw(weth, assets, address(this))`
 2. Quema aWETH, recibe WETH (1:1 + yield acumulado)
-3. Transfiere WETH al manager: `safeTransfer(msg.sender, actualWithdrawn)`
-4. Emite `Withdrawn(msg.sender, actualWithdrawn, assets)`
+3. Transfiere WETH al manager: `safeTransfer(msg.sender, actual_withdrawn)`
+4. Emite `Withdrawn(msg.sender, actual_withdrawn, assets)`
 
 **Modificadores**: `onlyManager`
 
@@ -906,7 +906,7 @@ Deposita WETH en Compound v3.
 
 ---
 
-#### withdraw(uint256 assets) → uint256 actualWithdrawn
+#### withdraw(uint256 assets) → uint256 actual_withdrawn
 
 Retira WETH de Compound v3.
 
@@ -914,9 +914,9 @@ Retira WETH de Compound v3.
 1. Captura `balance_before = IERC20(asset).balanceOf(address(this))`
 2. Llama `compound_comet.withdraw(weth, assets)`
 3. Captura `balance_after = IERC20(asset).balanceOf(address(this))`
-4. Calcula `actualWithdrawn = balance_after - balance_before` (captura rounding)
-5. Transfiere WETH al manager: `safeTransfer(msg.sender, actualWithdrawn)`
-6. Emite `Withdrawn(msg.sender, actualWithdrawn, assets)`
+4. Calcula `actual_withdrawn = balance_after - balance_before` (captura rounding)
+5. Transfiere WETH al manager: `safeTransfer(msg.sender, actual_withdrawn)`
+6. Emite `Withdrawn(msg.sender, actual_withdrawn, assets)`
 
 **Modificadores**: `onlyManager`
 
@@ -979,7 +979,7 @@ APY actual de Compound para WETH.
    // rate está en base 1e18 por segundo
    // APY = rate * seconds_per_year * 10000 / 1e18
    // Simplificado: (rate * 315360000000) / 1e18
-   apyBasisPoints = (uint256(rate) * 315360000000) / 1e18;
+   apy_basis_points = (uint256(rate) * 315360000000) / 1e18;
    ```
 
 **Ejemplo:**
@@ -1036,12 +1036,12 @@ Interfaz estándar que todas las estrategias deben implementar para permitir que
 
 ```solidity
 function deposit(uint256 assets) external returns (uint256 shares);
-function withdraw(uint256 assets) external returns (uint256 actualWithdrawn);
+function withdraw(uint256 assets) external returns (uint256 actual_withdrawn);
 function harvest() external returns (uint256 profit);
 function totalAssets() external view returns (uint256 total);
-function apy() external view returns (uint256 apyBasisPoints);
-function name() external view returns (string memory strategyName);
-function asset() external view returns (address assetAddress);
+function apy() external view returns (uint256 apy_basis_points);
+function name() external view returns (string memory strategy_name);
+function asset() external view returns (address asset_address);
 ```
 
 ### Eventos
@@ -1054,7 +1054,7 @@ event Harvested(address indexed caller, uint256 profit);
 
 ### Nota Importante
 
-La interfaz incluye `harvest()` como función requerida — todas las estrategias de VynX V1 deben soportar cosecha de rewards. El `actualWithdrawn` en `withdraw()` permite contabilizar el rounding de protocolos externos.
+La interfaz incluye `harvest()` como función requerida — todas las estrategias de VynX V1 deben soportar cosecha de rewards. El `actual_withdrawn` en `withdraw()` permite contabilizar el rounding de protocolos externos.
 
 ---
 
