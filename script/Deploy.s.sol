@@ -2,6 +2,7 @@
 pragma solidity 0.8.33;
 
 import {Script, console} from "forge-std/Script.sol";
+import {Router} from "../src/periphery/Router.sol";
 import {Vault} from "../src/core/Vault.sol";
 import {StrategyManager} from "../src/core/StrategyManager.sol";
 import {AaveStrategy} from "../src/strategies/AaveStrategy.sol";
@@ -11,7 +12,7 @@ import {CompoundStrategy} from "../src/strategies/CompoundStrategy.sol";
  * @title Deploy
  * @author cristianrisueo
  * @notice Script de despliegue del protocolo VynX V1 en Ethereum Mainnet
- * @dev Despliega los 4 contratos y resuelve la dependencia circular entre vault y manager
+ * @dev Despliega los 5 contratos y resuelve la dependencia circular entre vault y manager
  *      El deployer (msg.sender) queda como owner de vault, manager, y como treasury/founder
  *
  * Secuencia de despliegue:
@@ -19,10 +20,11 @@ import {CompoundStrategy} from "../src/strategies/CompoundStrategy.sol";
  *   2. AaveStrategy      — necesita address mainnet de manager, WETH, Aave Pool
  *   3. CompoundStrategy  — necesita address mainnet de manager, WETH, Compound Comet
  *   4. Vault             — necesita address mainnet de: WETH, manager, treasury, founder
- *   5. manager.initialize(vault)        — resuelve dependencia circular
- *   6. manager.addStrategy(aave)        — registra Aave
- *   7. manager.addStrategy(compound)    — registra Compound
- *   8. vault.setOfficialKeeper(deployer, true) — configura keeper oficial
+ *   5. Router            — necesita address mainnet de: WETH, Vault, Uniswap Router
+ *   6. manager.initialize(vault)        — resuelve dependencia circular
+ *   7. manager.addStrategy(aave)        — registra Aave
+ *   8. manager.addStrategy(compound)    — registra Compound
+ *   9. vault.setOfficialKeeper(deployer, true) — configura keeper oficial
  *
  * Uso:
  *   forge script script/Deploy.s.sol --rpc-url $MAINNET_RPC_URL --broadcast --verify
@@ -99,11 +101,15 @@ contract Deploy is Script {
         Vault vault = new Vault(WETH, address(manager), deployer, deployer);
         console.log("Vault:", address(vault));
 
-        // 5. Resuelve dependencia circular: Manager ahora tiene el address del vault como "owner/invoker"
+        // 5. Router: contrato periférico para depósitos y retiros multi-token
+        Router router = new Router(WETH, address(vault), UNISWAP_ROUTER);
+        console.log("Router:", address(router));
+
+        // 6. Resuelve dependencia circular: Manager ahora tiene el address del vault como "owner/invoker"
         manager.initialize(address(vault));
         console.log("Vault inicializado en manager");
 
-        // 6. Añade las estrategias al manager
+        // 7. Añade las estrategias al manager
         manager.addStrategy(address(aave_strategy));
         manager.addStrategy(address(compound_strategy));
         console.log("Estrategias registradas: Aave + Compound");
