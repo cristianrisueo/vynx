@@ -3,6 +3,7 @@ pragma solidity 0.8.33;
 
 import {Test} from "forge-std/Test.sol";
 import {Vault} from "../../src/core/Vault.sol";
+import {Router} from "../../src/periphery/Router.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
@@ -19,8 +20,14 @@ contract Handler is Test {
     /// @notice Instancia del vault a testear
     Vault public vault;
 
+    /// @notice Instancia del router
+    Router public router;
+
     /// @notice Dirección del contrato WETH en Mainnet
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+
+    /// @notice Dirección del contrato USDC en Mainnet
+    address constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
 
     /// @notice Lista de usuarios simulados
     address[] public actors;
@@ -32,12 +39,14 @@ contract Handler is Test {
     //* Constructor
 
     /**
-     * @notice Inicializa el handler con el vault y los actores disponibles
+     * @notice Inicializa el handler con el vault, router y los actores disponibles
      * @param _vault Instancia del vault a testear
+     * @param _router Instancia del router a testear
      * @param _actors Lista de direcciones que pueden interactuar
      */
-    constructor(Vault _vault, address[] memory _actors) {
+    constructor(Vault _vault, Router _router, address[] memory _actors) {
         vault = _vault;
+        router = _router;
         actors = _actors;
     }
 
@@ -128,5 +137,86 @@ contract Handler is Test {
         if (vault.totalAssets() > vault.min_profit_for_harvest()) {
             vault.harvest();
         }
+    }
+
+    //* === Router Actions ===
+
+    /**
+     * @notice Acción: Depositar ETH vía Router
+     */
+    function routerZapDepositETH(uint256 actor_seed, uint256 amount) external {
+        address actor = actors[actor_seed % actors.length];
+
+        uint256 max_tvl = vault.max_tvl();
+        uint256 current_total = vault.totalAssets();
+
+        if (current_total >= max_tvl) return;
+
+        uint256 available = max_tvl - current_total;
+        uint256 min = vault.min_deposit();
+
+        if (available < min) return;
+
+        amount = bound(amount, min, available);
+
+        deal(actor, amount);
+
+        vm.prank(actor);
+        router.zapDepositETH{value: amount}();
+
+        ghost_totalDeposited += amount;
+    }
+
+    /**
+     * @notice Acción: Depositar USDC vía Router
+     */
+    function routerZapDepositUSDC(uint256 actor_seed, uint256 amount) external {
+        address actor = actors[actor_seed % actors.length];
+
+        uint256 max_tvl = vault.max_tvl();
+        uint256 current_total = vault.totalAssets();
+
+        if (current_total >= max_tvl) return;
+
+        uint256 available = max_tvl - current_total;
+        uint256 min = vault.min_deposit();
+
+        if (available < min) return;
+
+        // USDC tiene 6 decimales, WETH tiene 18
+        // 1 USDC ~= 0.0004 WETH (asumiendo precio ETH ~$2500)
+        // Acotar amount en USDC
+        amount = bound(amount, min * 2500 / 1e12, available * 2500 / 1e12); // conversión burda WETH → USDC
+
+        deal(USDC, actor, amount);
+
+        vm.startPrank(actor);
+        IERC20(USDC).approve(address(router), amount);
+        router.zapDepositERC20(USDC, amount, 500, 0);
+        vm.stopPrank();
+
+        // Aproximar cantidad depositada en WETH
+        ghost_totalDeposited += amount * 1e12 / 2500;
+    }
+
+    /**
+     * @notice Acción: Retirar vía Router a ETH
+     */
+    function routerZapWithdrawETH(uint256 actor_seed, uint256 shares) external {
+        address actor = actors[actor_seed % actors.length];
+
+        uint256 actor_shares = vault.balanceOf(actor);
+        if (actor_shares == 0) return;
+
+        shares = bound(shares, 1, actor_shares);
+
+        uint256 assets_to_withdraw = vault.previewRedeem(shares);
+
+        vm.startPrank(actor);
+        vault.approve(address(router), shares);
+        router.zapWithdrawETH(shares);
+        vm.stopPrank();
+
+        ghost_totalWithdrawn += assets_to_withdraw;
     }
 }

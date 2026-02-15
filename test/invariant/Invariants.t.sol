@@ -6,6 +6,7 @@ import {Vault} from "../../src/core/Vault.sol";
 import {StrategyManager} from "../../src/core/StrategyManager.sol";
 import {AaveStrategy} from "../../src/strategies/AaveStrategy.sol";
 import {CompoundStrategy} from "../../src/strategies/CompoundStrategy.sol";
+import {Router} from "../../src/periphery/Router.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Handler} from "./Handler.sol";
 
@@ -26,17 +27,20 @@ contract InvariantsTest is Test {
     StrategyManager public manager;
     AaveStrategy public aave_strategy;
     CompoundStrategy public compound_strategy;
+    Router public router;
     Handler public handler;
 
     /// @notice Direcciones de los contratos en Mainnet
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
     address constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address constant COMPOUND_COMET = 0xA17581A9E3356d9A858b789D68B4d866e593aE94;
     address constant AAVE_REWARDS = 0x8164Cc65827dcFe994AB23944CBC90e0aa80bFcb;
     address constant COMPOUND_REWARDS = 0x1B0e765F6224C21223AeA2af16c1C46E38885a40;
     address constant AAVE_TOKEN = 0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9;
     address constant COMP_TOKEN = 0xc00e94Cb662C3520282E6f5717214004A7f26888;
-    address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+
+    /// @notice Pool fee de Uniswap router
     uint24 constant POOL_FEE = 3000;
 
     /// @notice Lista de usuarios simulados
@@ -61,8 +65,11 @@ contract InvariantsTest is Test {
         vault.setOfficialKeeper(address(this), true);
 
         // Despliega estrategias con direcciones reales de Mainnet
-        aave_strategy = new AaveStrategy(address(manager), AAVE_POOL, AAVE_REWARDS, WETH, AAVE_TOKEN, UNISWAP_ROUTER, POOL_FEE);
-        compound_strategy = new CompoundStrategy(address(manager), COMPOUND_COMET, COMPOUND_REWARDS, WETH, COMP_TOKEN, UNISWAP_ROUTER, POOL_FEE);
+        aave_strategy =
+            new AaveStrategy(address(manager), AAVE_POOL, AAVE_REWARDS, WETH, AAVE_TOKEN, UNISWAP_ROUTER, POOL_FEE);
+        compound_strategy = new CompoundStrategy(
+            address(manager), COMPOUND_COMET, COMPOUND_REWARDS, WETH, COMP_TOKEN, UNISWAP_ROUTER, POOL_FEE
+        );
 
         // Conecta estrategias al manager
         manager.addStrategy(address(aave_strategy));
@@ -73,8 +80,11 @@ contract InvariantsTest is Test {
         actors.push(makeAddr("actor2"));
         actors.push(makeAddr("actor3"));
 
+        // Despliega Router
+        router = new Router(WETH, address(vault), UNISWAP_ROUTER);
+
         // Despliega el handler y lo configura como único target de los tests
-        handler = new Handler(vault, actors);
+        handler = new Handler(vault, router, actors);
         targetContract(address(handler));
     }
 
@@ -144,5 +154,19 @@ contract InvariantsTest is Test {
 
         // La suma de balances de holders conocidos debe ser <= totalSupply
         assertLe(known_holders_sum, total_supply, "INVARIANTE ROTA: Shares aparecieron de la nada");
+    }
+
+    /**
+     * @notice Invariante: El Router siempre permanece stateless
+     * @dev El Router NUNCA debe retener fondos entre transacciones
+     *      Balance de WETH, ETH y cualquier ERC20 debe ser siempre 0
+     */
+    function invariant_RouterAlwaysStateless() external view {
+        assertEq(IERC20(WETH).balanceOf(address(router)), 0, "Router should never hold WETH");
+
+        assertEq(address(router).balance, 0, "Router should never hold ETH");
+
+        // No podemos verificar todos los ERC20, pero WETH es el crítico
+        // En producción, el balance check interno del Router garantiza esto
     }
 }

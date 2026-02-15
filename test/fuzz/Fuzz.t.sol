@@ -6,6 +6,7 @@ import {Vault} from "../../src/core/Vault.sol";
 import {StrategyManager} from "../../src/core/StrategyManager.sol";
 import {AaveStrategy} from "../../src/strategies/AaveStrategy.sol";
 import {CompoundStrategy} from "../../src/strategies/CompoundStrategy.sol";
+import {Router} from "../../src/periphery/Router.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
@@ -23,16 +24,18 @@ contract FuzzTest is Test {
     StrategyManager public manager;
     AaveStrategy public aave_strategy;
     CompoundStrategy public compound_strategy;
+    Router public router;
 
     /// @notice Direcciones de los contratos en Mainnet
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    address constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
+    address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
     address constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address constant COMPOUND_COMET = 0xA17581A9E3356d9A858b789D68B4d866e593aE94;
     address constant AAVE_REWARDS = 0x8164Cc65827dcFe994AB23944CBC90e0aa80bFcb;
     address constant COMPOUND_REWARDS = 0x1B0e765F6224C21223AeA2af16c1C46E38885a40;
     address constant AAVE_TOKEN = 0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9;
     address constant COMP_TOKEN = 0xc00e94Cb662C3520282E6f5717214004A7f26888;
-    address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
     uint24 constant POOL_FEE = 3000;
 
     /// @notice Usuarios de prueba
@@ -62,12 +65,18 @@ contract FuzzTest is Test {
         manager.initialize(address(vault));
 
         // Despliega estrategias con direcciones reales de Mainnet
-        aave_strategy = new AaveStrategy(address(manager), AAVE_POOL, AAVE_REWARDS, WETH, AAVE_TOKEN, UNISWAP_ROUTER, POOL_FEE);
-        compound_strategy = new CompoundStrategy(address(manager), COMPOUND_COMET, COMPOUND_REWARDS, WETH, COMP_TOKEN, UNISWAP_ROUTER, POOL_FEE);
+        aave_strategy =
+            new AaveStrategy(address(manager), AAVE_POOL, AAVE_REWARDS, WETH, AAVE_TOKEN, UNISWAP_ROUTER, POOL_FEE);
+        compound_strategy = new CompoundStrategy(
+            address(manager), COMPOUND_COMET, COMPOUND_REWARDS, WETH, COMP_TOKEN, UNISWAP_ROUTER, POOL_FEE
+        );
 
         // Conecta estrategias al manager
         manager.addStrategy(address(aave_strategy));
         manager.addStrategy(address(compound_strategy));
+
+        // Despliega Router
+        router = new Router(WETH, address(vault), UNISWAP_ROUTER);
     }
 
     //* Funciones internas helpers
@@ -187,5 +196,48 @@ contract FuzzTest is Test {
 
         // Lo recibido nunca excede lo depositado (puede haber pérdida por redondeo)
         assertLe(assets_out, amount, "Deposit-redeem no deberia ser profitable");
+    }
+
+    //* === Router Fuzz Tests ===
+
+    /**
+     * @notice Fuzz: zapDepositETH con cualquier amount válido
+     */
+    function testFuzz_Router_ZapDepositETH(uint256 amount) external {
+        // Acotar amount entre 0.01 ETH y 1000 ETH
+        amount = bound(amount, 0.01 ether, 1000 ether);
+
+        deal(alice, amount);
+
+        vm.prank(alice);
+        uint256 shares = router.zapDepositETH{value: amount}();
+
+        // Invariante: siempre recibe shares > 0
+        assertGt(shares, 0, "Should always receive shares");
+        assertEq(IERC20(WETH).balanceOf(address(router)), 0, "Router must be stateless");
+    }
+
+    /**
+     * @notice Fuzz: zapDepositERC20 con cualquier amount y poolFee
+     */
+    function testFuzz_Router_ZapDepositERC20(uint256 amount, uint24 pool_fee) external {
+        // Acotar amount (suficiente para superar min_deposit tras swap)
+        // 100 USDC → ~0.04 ETH, min_deposit es 0.01 ETH
+        amount = bound(amount, 100e6, 1_000_000e6); // 100 USDC a 1M USDC
+
+        // Acotar poolFee a valores válidos
+        uint24[4] memory valid_fees = [uint24(100), 500, 3000, 10000];
+        pool_fee = valid_fees[pool_fee % 4];
+
+        deal(USDC, alice, amount);
+
+        vm.startPrank(alice);
+        IERC20(USDC).approve(address(router), amount);
+        uint256 shares = router.zapDepositERC20(USDC, amount, pool_fee, 0);
+        vm.stopPrank();
+
+        // Invariante: siempre recibe shares
+        assertGt(shares, 0, "Should receive shares");
+        assertEq(IERC20(WETH).balanceOf(address(router)), 0, "Router must be stateless");
     }
 }

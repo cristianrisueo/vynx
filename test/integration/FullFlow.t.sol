@@ -6,6 +6,7 @@ import {Vault} from "../../src/core/Vault.sol";
 import {StrategyManager} from "../../src/core/StrategyManager.sol";
 import {AaveStrategy} from "../../src/strategies/AaveStrategy.sol";
 import {CompoundStrategy} from "../../src/strategies/CompoundStrategy.sol";
+import {Router} from "../../src/periphery/Router.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
@@ -22,9 +23,13 @@ contract FullFlowTest is Test {
     StrategyManager public manager;
     AaveStrategy public aave_strategy;
     CompoundStrategy public compound_strategy;
+    Router public router;
 
     /// @notice Direcciones de los contratos en Mainnet
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    address constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
+    address constant DAI = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
+    address constant WBTC = 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599;
     address constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address constant COMPOUND_COMET = 0xA17581A9E3356d9A858b789D68B4d866e593aE94;
     address constant AAVE_REWARDS = 0x8164Cc65827dcFe994AB23944CBC90e0aa80bFcb;
@@ -67,6 +72,9 @@ contract FullFlowTest is Test {
         // Conecta estrategias al manager
         manager.addStrategy(address(aave_strategy));
         manager.addStrategy(address(compound_strategy));
+
+        // Despliega Router
+        router = new Router(WETH, address(vault), UNISWAP_ROUTER);
     }
 
     //* Funciones internas helpers
@@ -298,5 +306,92 @@ contract FullFlowTest is Test {
         // Comprueba que el yield sea razonable (entre 0.01% y 5% en 30 días) si no algo raro hay
         assertGt(yield_earned, total_before / 10000, "Yield demasiado bajo");
         assertLt(yield_earned, (total_before * 5) / 100, "Yield sospechosamente alto");
+    }
+
+    //* === Router Integration Tests ===
+
+    /**
+     * @notice Test E2E: Depositar USDC vía Router → Retirar USDC vía Router
+     */
+    function test_E2E_Router_DepositUSDC_WithdrawUSDC() external {
+        // Setup: dar USDC a Alice
+        uint256 usdc_amount = 5000e6; // 5000 USDC
+        deal(USDC, alice, usdc_amount);
+
+        // 1. Alice deposita USDC vía Router
+        vm.startPrank(alice);
+        IERC20(USDC).approve(address(router), usdc_amount);
+        uint256 shares = router.zapDepositERC20(USDC, usdc_amount, 500, 0);
+
+        // 2. Avanzar tiempo y simular yield
+        skip(7 days);
+
+        // 3. Alice retira todo en USDC
+        vault.approve(address(router), shares);
+        uint256 usdc_out = router.zapWithdrawERC20(shares, USDC, 500, 0);
+        vm.stopPrank();
+
+        // Verificar: Alice debería recibir aproximadamente lo depositado (sin yield significativo en 7 días)
+        assertApproxEqRel(usdc_out, usdc_amount, 0.02e18, "Should receive ~deposited amount");
+    }
+
+    /**
+     * @notice Test E2E: Depositar ETH vía Router → Retirar ETH vía Router
+     */
+    function test_E2E_Router_DepositETH_WithdrawETH() external {
+        uint256 eth_amount = 10 ether;
+        deal(alice, eth_amount);
+
+        // 1. Alice deposita ETH
+        vm.prank(alice);
+        uint256 shares = router.zapDepositETH{value: eth_amount}();
+
+        // 2. Alice retira todo en ETH
+        vm.startPrank(alice);
+        vault.approve(address(router), shares);
+        uint256 eth_out = router.zapWithdrawETH(shares);
+        vm.stopPrank();
+
+        // Verificar: eth_out debe ser aproximadamente lo depositado
+        assertApproxEqRel(eth_out, eth_amount, 0.01e18, "Should receive ~deposited ETH");
+        assertEq(vault.balanceOf(alice), 0, "Shares should be burned");
+    }
+
+    /**
+     * @notice Test E2E: Depositar DAI → Retirar USDC (tokens diferentes)
+     */
+    function test_E2E_Router_DepositDAI_WithdrawUSDC() external {
+        uint256 dai_amount = 5000e18; // 5000 DAI
+        deal(DAI, alice, dai_amount);
+
+        // 1. Depositar DAI
+        vm.startPrank(alice);
+        IERC20(DAI).approve(address(router), dai_amount);
+        uint256 shares = router.zapDepositERC20(DAI, dai_amount, 500, 0);
+
+        // 2. Retirar en USDC (diferente token)
+        vault.approve(address(router), shares);
+        uint256 usdc_out = router.zapWithdrawERC20(shares, USDC, 500, 0);
+        vm.stopPrank();
+
+        // Verificar: USDC out ~= DAI in (ambos stablecoins 1:1)
+        assertApproxEqRel(usdc_out, dai_amount / 1e12, 0.05e18, "USDC should equal DAI");
+    }
+
+    /**
+     * @notice Test E2E: WBTC usa pool 0.3% (no 0.05%)
+     */
+    function test_E2E_Router_DepositWBTC_UsesPool3000() external {
+        uint256 wbtc_amount = 1e8; // 1 WBTC (8 decimals)
+        deal(WBTC, alice, wbtc_amount);
+
+        // Depositar con pool 0.3% (3000)
+        vm.startPrank(alice);
+        IERC20(WBTC).approve(address(router), wbtc_amount);
+        uint256 shares = router.zapDepositERC20(WBTC, wbtc_amount, 3000, 0);
+        vm.stopPrank();
+
+        // Verificar que recibió shares (pool funcionó)
+        assertGt(shares, 0, "Should receive shares using 0.3% pool");
     }
 }
