@@ -1,6 +1,6 @@
 # Documentación de Contratos
 
-Este documento proporciona documentación técnica detallada de cada contrato del protocolo VynX V1, incluyendo variables de estado, funciones principales, eventos y modificadores.
+Este documento proporciona documentación técnica detallada de cada contrato del protocolo VynX V2, incluyendo variables de estado, funciones principales, eventos y modificadores.
 
 ---
 
@@ -1089,6 +1089,230 @@ function getUtilization() external view returns (uint256 utilization);
 ```solidity
 function claim(address comet, address src, bool shouldAccrue) external;
 function getRewardOwed(address comet, address account) external returns (RewardOwed memory);
+```
+
+---
+
+## Router.sol
+
+**Ubicación**: `src/periphery/Router.sol`
+
+### Propósito
+
+Contrato periférico stateless que permite depositar y retirar del Vault usando ETH nativo o cualquier token ERC20 con pool de Uniswap V3. Actúa como punto de entrada multi-token sin requerir que el usuario tenga WETH previamente.
+
+### Herencia
+
+- `IRouter`: Interfaz del Router (eventos y funciones)
+- `ReentrancyGuard` (OpenZeppelin): Protección contra reentrancy en todas las funciones públicas
+
+### Llamado Por
+
+- **Usuarios (EOAs/contratos)**: `zapDepositETH()`, `zapDepositERC20()`, `zapWithdrawETH()`, `zapWithdrawERC20()`
+
+### Llama A
+
+- **IERC4626(vault)**: `deposit()`, `redeem()`
+- **ISwapRouter(uniswap)**: `exactInputSingle()` para swaps ERC20 ↔ WETH
+- **WETH**: `deposit()` (wrap), `withdraw()` (unwrap) via low-level calls
+
+### Variables de Estado
+
+```solidity
+// Inmutables (establecidas en constructor)
+address public immutable weth;         // Dirección del token WETH
+address public immutable vault;        // Dirección del Vault VynX (ERC4626)
+address public immutable swap_router;  // Dirección del Uniswap V3 SwapRouter
+```
+
+### Constructor
+
+```solidity
+constructor(address _weth, address _vault, address _swap_router)
+```
+
+**Flujo:**
+1. Valida que ninguna dirección sea `address(0)` (revierte con `Router__ZeroAddress`)
+2. Establece las 3 variables inmutables
+3. Aprueba al vault transfer de WETH ilimitado: `IERC20(weth).forceApprove(vault, type(uint256).max)`
+
+### Funciones Principales
+
+#### zapDepositETH() payable → uint256 shares
+
+Deposita ETH nativo en el vault (wrap → deposit).
+
+**Flujo:**
+1. Verifica `msg.value > 0`
+2. Wrappea ETH a WETH: `_wrapETH(msg.value)`
+3. Deposita WETH en vault: `vault.deposit(msg.value, msg.sender)` → shares al usuario
+4. Verifica stateless: `balanceOf(this) == 0`
+5. Emite `ZapDeposit(msg.sender, address(0), msg.value, msg.value, shares)`
+
+#### zapDepositERC20(token_in, amount_in, pool_fee, min_weth_out) → uint256 shares
+
+Deposita ERC20 en el vault (swap → deposit).
+
+**Flujo:**
+1. Valida: `token_in != address(0)`, `token_in != weth`, `amount_in > 0`
+2. Transfiere `token_in` del usuario al Router
+3. Swapea `token_in → WETH`: `_swapToWETH(token_in, amount_in, pool_fee, min_weth_out)`
+4. Deposita WETH en vault → shares al usuario
+5. Verifica stateless
+6. Emite `ZapDeposit(msg.sender, token_in, amount_in, weth_out, shares)`
+
+#### zapWithdrawETH(shares) → uint256 eth_out
+
+Retira shares del vault y recibe ETH nativo (redeem → unwrap).
+
+**Flujo:**
+1. Valida `shares > 0`
+2. Transfiere shares del usuario al Router (requiere aprobación previa)
+3. Redime shares: `vault.redeem(shares, address(this), address(this))` → WETH al Router
+4. Unwrappea WETH a ETH: `_unwrapWETH(weth_redeemed)`
+5. Transfiere ETH al usuario via low-level call
+6. Verifica stateless
+7. Emite `ZapWithdraw(msg.sender, shares, weth_redeemed, address(0), eth_out)`
+
+#### zapWithdrawERC20(shares, token_out, pool_fee, min_token_out) → uint256 amount_out
+
+Retira shares del vault y recibe ERC20 (redeem → swap).
+
+**Flujo:**
+1. Valida: `token_out != address(0)`, `token_out != weth`, `shares > 0`
+2. Transfiere shares del usuario al Router
+3. Redime shares → WETH al Router
+4. Swapea `WETH → token_out`: `_swapFromWETH(weth_redeemed, token_out, pool_fee, min_token_out)`
+5. Transfiere `token_out` al usuario
+6. Verifica stateless (balance de `token_out` == 0)
+7. Emite `ZapWithdraw(msg.sender, shares, weth_redeemed, token_out, amount_out)`
+
+### Funciones Internas
+
+#### _wrapETH(uint256 amount)
+
+```solidity
+(bool success,) = weth.call{value: amount}(abi.encodeWithSignature("deposit()"));
+if (!success) revert Router__ETHWrapFailed();
+```
+
+#### _unwrapWETH(uint256 amount) → uint256 eth_out
+
+```solidity
+(bool success,) = weth.call(abi.encodeWithSignature("withdraw(uint256)", amount));
+if (!success) revert Router__ETHUnwrapFailed();
+return amount;
+```
+
+#### _swapToWETH(token_in, amount_in, pool_fee, min_weth_out) → uint256 weth_out
+
+```solidity
+IERC20(token_in).forceApprove(swap_router, amount_in);
+weth_out = ISwapRouter(swap_router).exactInputSingle({
+    tokenIn: token_in,
+    tokenOut: weth,
+    fee: pool_fee,
+    recipient: address(this),
+    deadline: block.timestamp,
+    amountIn: amount_in,
+    amountOutMinimum: min_weth_out,
+    sqrtPriceLimitX96: 0
+});
+if (weth_out < min_weth_out) revert Router__SlippageExceeded();
+```
+
+#### _swapFromWETH(weth_in, token_out, pool_fee, min_token_out) → uint256 amount_out
+
+Similar a `_swapToWETH` pero invirtiendo tokenIn/tokenOut.
+
+### Función receive()
+
+```solidity
+receive() external payable {
+    if (msg.sender != weth) revert Router__UnauthorizedETHSender();
+}
+```
+
+**Propósito**: Solo acepta ETH del contrato WETH (durante unwrap). Previene envíos accidentales de ETH.
+
+### Eventos
+
+Heredados de `IRouter`:
+
+```solidity
+event ZapDeposit(
+    address indexed user,
+    address indexed token_in,  // address(0) si es ETH
+    uint256 amount_in,
+    uint256 weth_out,
+    uint256 shares_out
+);
+
+event ZapWithdraw(
+    address indexed user,
+    uint256 shares_in,
+    uint256 weth_redeemed,
+    address indexed token_out,  // address(0) si es ETH
+    uint256 amount_out
+);
+```
+
+### Errores Custom
+
+```solidity
+error Router__ZeroAddress();
+error Router__ZeroAmount();
+error Router__SlippageExceeded();
+error Router__ETHWrapFailed();
+error Router__FundsStuck();
+error Router__UseVaultForWETH();
+error Router__UnauthorizedETHSender();
+error Router__ETHUnwrapFailed();
+```
+
+---
+
+## IRouter.sol
+
+**Ubicación**: `src/interfaces/periphery/IRouter.sol`
+
+### Propósito
+
+Interfaz estándar del Router que define eventos y funciones públicas. Cualquier implementación del Router debe cumplir esta interfaz.
+
+### Eventos
+
+```solidity
+event ZapDeposit(
+    address indexed user,
+    address indexed token_in,
+    uint256 amount_in,
+    uint256 weth_out,
+    uint256 shares_out
+);
+
+event ZapWithdraw(
+    address indexed user,
+    uint256 shares_in,
+    uint256 weth_redeemed,
+    address indexed token_out,
+    uint256 amount_out
+);
+```
+
+### Funciones Requeridas
+
+```solidity
+function weth() external view returns (address);
+function vault() external view returns (address);
+function swap_router() external view returns (address);
+
+function zapDepositETH() external payable returns (uint256 shares);
+function zapDepositERC20(address token_in, uint256 amount_in, uint24 pool_fee, uint256 min_weth_out)
+    external returns (uint256 shares);
+function zapWithdrawETH(uint256 shares) external returns (uint256 eth_out);
+function zapWithdrawERC20(uint256 shares, address token_out, uint24 pool_fee, uint256 min_token_out)
+    external returns (uint256 amount_out);
 ```
 
 ---

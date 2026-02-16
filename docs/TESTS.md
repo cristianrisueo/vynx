@@ -1,6 +1,6 @@
 # Testing
 
-Este documento describe la suite de tests del Multi-Strategy Vault, incluyendo estructura, ficheros, coverage y particularidades de ejecución.
+Este documento describe la suite de tests de VynX V2 (Vault + Router), incluyendo estructura, ficheros, coverage y particularidades de ejecución.
 
 ---
 
@@ -11,10 +11,11 @@ Todos los tests se ejecutan contra un **fork de Ethereum Mainnet** real mediante
 ```
 test/
 ├── unit/                    # Tests unitarios por contrato
-│   ├── StrategyVault.t.sol
+│   ├── Vault.t.sol
 │   ├── StrategyManager.t.sol
 │   ├── AaveStrategy.t.sol
-│   └── CompoundStrategy.t.sol
+│   ├── CompoundStrategy.t.sol
+│   └── Router.t.sol
 ├── integration/             # Tests de integración end-to-end
 │   └── FullFlow.t.sol
 ├── fuzz/                    # Fuzz tests stateless
@@ -24,7 +25,7 @@ test/
     └── Handler.sol
 ```
 
-**Total: 75 tests** (61 unitarios + 6 integración + 5 fuzz + 3 invariantes)
+**Total: 96 tests** (76 unitarios + 10 integración + 6 fuzz + 4 invariantes)
 
 ### Ejecución
 
@@ -45,7 +46,7 @@ forge test -vv
 
 Tests aislados por contrato. Validan cada función pública con happy paths y revert paths.
 
-### StrategyVault.t.sol — `test/unit/StrategyVault.t.sol`
+### Vault.t.sol — `test/unit/Vault.t.sol`
 
 22 tests que cubren el vault ERC4626: deposits, withdrawals, minting, redeeming, fees, idle buffer y admin.
 
@@ -142,13 +143,37 @@ Tests aislados por contrato. Validan cada función pública con happy paths y re
 
 **Coverage**: 88.24% lines, 92.59% statements, 60.00% branches, 100.00% functions
 
+### Router.t.sol — `test/unit/Router.t.sol`
+
+15 tests que cubren el Router periférico: zap deposits (ETH/ERC20), zap withdrawals (ETH/ERC20), slippage, stateless.
+
+| Test                                     | Descripción                                              |
+| ---------------------------------------- | -------------------------------------------------------- |
+| `test_ZapDepositETH_Success`             | Depositar ETH genera shares correctamente                |
+| `test_ZapDepositETH_RevertsIfZeroAmount` | Revert si msg.value es 0                                 |
+| `test_ZapDepositETH_StatelessEnforcement`| Router balance WETH = 0 tras depósito                    |
+| `test_ZapDepositETH_EmitsEvent`          | Emite ZapDeposit correctamente                           |
+| `test_ZapDepositERC20_Success_USDC`      | Depositar USDC → swap → shares funciona                  |
+| `test_ZapDepositERC20_RevertsIfZeroAddress`| Revert si token_in es address(0)                       |
+| `test_ZapDepositERC20_RevertsIfTokenIsWETH`| Revert si token_in es WETH (usar vault directo)       |
+| `test_ZapDepositERC20_RevertsIfZeroAmount` | Revert si amount_in es 0                               |
+| `test_ZapDepositERC20_SlippageProtection`| Revierte si min_weth_out demasiado alto                  |
+| `test_ZapWithdrawETH_Success`            | Retirar shares → recibir ETH funciona                    |
+| `test_ZapWithdrawETH_RevertsIfZeroShares`| Revert si shares es 0                                    |
+| `test_ZapWithdrawETH_StatelessEnforcement`| Router balance = 0 tras retiro                          |
+| `test_ZapWithdrawERC20_Success_USDC`     | Retirar shares → recibir USDC funciona                   |
+| `test_ZapWithdrawERC20_RevertsIfTokenIsWETH`| Revert si token_out es WETH                           |
+| `test_ZapWithdrawERC20_OnlyChecksTokenOutBalance`| Solo verifica balance de token_out (no WETH)       |
+
+**Coverage**: 94.29% lines, 94.44% statements, 78.57% branches, 100.00% functions
+
 ---
 
 ## 2. Tests de Integración
 
 ### FullFlow.t.sol — `test/integration/FullFlow.t.sol`
 
-6 tests end-to-end que validan flujos completos cruzando vault → manager → strategies → protocolos reales.
+10 tests end-to-end que validan flujos completos cruzando vault → manager → strategies → protocolos reales + flujos Router.
 
 | Test                                 | Descripción                                                                                 |
 | ------------------------------------ | ------------------------------------------------------------------------------------------- |
@@ -158,6 +183,10 @@ Tests aislados por contrato. Validan cada función pública con happy paths y re
 | `test_E2E_PauseUnpauseRecovery`      | Deposit → pause (bloquea operaciones) → unpause → withdraw funciona correctamente           |
 | `test_E2E_RemoveStrategyAndWithdraw` | Deposit → eliminar estrategia Compound → withdraw desde Aave sin fondos bloqueados          |
 | `test_E2E_YieldAccrual`              | Deposit → avanza 30 días → comprueba que totalAssets creció por yield real de Aave/Compound |
+| `test_E2E_Router_DepositUSDC_WithdrawUSDC` | Depositar USDC vía Router → retirarlo en USDC                                      |
+| `test_E2E_Router_DepositETH_WithdrawETH`   | Depositar ETH vía Router → retirarlo en ETH                                        |
+| `test_E2E_Router_DepositDAI_WithdrawUSDC`  | Depositar DAI → retirar USDC (tokens diferentes)                                    |
+| `test_E2E_Router_DepositWBTC_UsesPool3000` | WBTC usa pool 0.3% (no 0.05%)                                                       |
 
 ---
 
@@ -165,15 +194,16 @@ Tests aislados por contrato. Validan cada función pública con happy paths y re
 
 ### Fuzz.t.sol — `test/fuzz/Fuzz.t.sol`
 
-5 tests stateless con inputs aleatorios. Cada test recibe valores aleatorios acotados a rangos válidos (min_deposit a max_tvl) y verifica propiedades que deben cumplirse para cualquier input.
+6 tests stateless con inputs aleatorios. Cada test recibe valores aleatorios acotados a rangos válidos y verifica propiedades que deben cumplirse para cualquier input.
 
 | Test                                     | Descripción                                                                 |
 | ---------------------------------------- | --------------------------------------------------------------------------- |
 | `testFuzz_Deposit_GeneratesShares`       | Para cualquier amount válido, deposit genera shares > 0 y totalAssets crece |
 | `testFuzz_Withdraw_NeverExceedsDeposit`  | Para cualquier withdraw parcial, el usuario no extrae más de lo depositado  |
-| `testFuzz_Withdraw_FeeAlwaysCollected`   | Para cualquier retiro válido, el fee receiver siempre cobra                 |
 | `testFuzz_Redeem_BurnsExactShares`       | Redeem quema exactamente las shares indicadas, ni más ni menos              |
-| `testFuzz_DepositRedeem_NeverProfitable` | Deposit → redeem inmediato nunca genera profit (fee del 2% lo impide)       |
+| `testFuzz_DepositRedeem_NeverProfitable` | Deposit → redeem inmediato nunca genera profit                              |
+| `testFuzz_Router_ZapDepositETH`          | zapDepositETH con cualquier amount válido (0.01-1000 ETH) genera shares     |
+| `testFuzz_Router_ZapDepositERC20`        | zapDepositERC20 con cualquier amount y pool_fee válido genera shares        |
 
 Configuración: 256 runs por test (configurable en `foundry.toml`).
 
@@ -183,20 +213,28 @@ Configuración: 256 runs por test (configurable en `foundry.toml`).
 
 ### Invariants.t.sol — `test/invariant/Invariants.t.sol`
 
-3 invariantes stateful. A diferencia de los fuzz tests, Foundry ejecuta **secuencias aleatorias** de operaciones (deposit, withdraw, deposit, withdraw...) y tras cada secuencia verifica que las propiedades globales se mantengan.
+4 invariantes stateful. A diferencia de los fuzz tests, Foundry ejecuta **secuencias aleatorias** de operaciones (deposit, withdraw, routerZapDeposit, routerZapWithdraw...) y tras cada secuencia verifica que las propiedades globales se mantengan.
 
 | Invariante                         | Propiedad                                                                      |
 | ---------------------------------- | ------------------------------------------------------------------------------ |
 | `invariant_VaultIsSolvent`         | totalAssets >= totalSupply (el vault puede cubrir todas las shares)            |
 | `invariant_AccountingIsConsistent` | idle_weth + manager.totalAssets() == vault.totalAssets() (contabilidad cuadra) |
 | `invariant_SupplyIsCoherent`       | Suma de balances individuales <= totalSupply (no se crean shares de la nada)   |
+| `invariant_RouterAlwaysStateless`  | Router nunca retiene WETH ni ETH entre transacciones (balance siempre 0)       |
 
 ### Handler.sol — `test/invariant/Handler.sol`
 
-Contrato intermediario que acota las llamadas al vault para que el fuzzer no pierda tiempo en reverts inútiles. Expone dos acciones:
+Contrato intermediario que acota las llamadas al vault y router para que el fuzzer no pierda tiempo en reverts inútiles. Expone acciones:
 
+**Vault directo:**
 - **`deposit(actor_seed, amount)`**: Elige un actor aleatorio, acota amount al espacio disponible en el vault y deposita
 - **`withdraw(actor_seed, amount)`**: Elige un actor con shares, acota amount a su máximo retirable y retira
+- **`harvest()`**: Ejecuta harvest si hay profit mínimo
+
+**Router:**
+- **`routerZapDepositETH(actor_seed, amount)`**: Deposita ETH vía Router
+- **`routerZapDepositUSDC(actor_seed, amount)`**: Deposita USDC vía Router (swap + deposit)
+- **`routerZapWithdrawETH(actor_seed, shares)`**: Retira shares vía Router → recibe ETH
 
 Incluye ghost variables (`ghost_totalDeposited`, `ghost_totalWithdrawn`) para tracking.
 
@@ -262,12 +300,13 @@ Suite result: ok. 3 passed; 0 failed; 0 skipped
 ╭─────────────────────────────────+──────────+──────────────+────────────+─────────╮
 │ Contrato                        │ Lines    │ Statements   │ Branches   │ Funcs   │
 ╞═════════════════════════════════╪══════════╪══════════════╪════════════╪═════════╡
-│ StrategyVault.sol               │ 85.37%   │ 85.38%       │ 50.00%    │ 80.00%  │
-│ StrategyManager.sol             │ 95.43%   │ 93.04%       │ 76.47%    │ 100.00% │
-│ AaveStrategy.sol                │ 88.89%   │ 93.10%       │ 60.00%    │ 100.00% │
-│ CompoundStrategy.sol            │ 88.24%   │ 92.59%       │ 60.00%    │ 100.00% │
+│ Vault.sol                       │ 95.32%   │ 92.98%       │ 76.67%    │ 100.00% │
+│ StrategyManager.sol             │ 75.57%   │ 69.53%       │ 56.41%    │ 100.00% │
+│ AaveStrategy.sol                │ 70.49%   │ 70.18%       │ 50.00%    │ 91.67%  │
+│ CompoundStrategy.sol            │ 80.70%   │ 86.00%       │ 70.00%    │ 91.67%  │
+│ Router.sol                      │ 94.29%   │ 94.44%       │ 78.57%    │ 100.00% │
 ╞═════════════════════════════════╪══════════╪══════════════╪════════════╪═════════╡
-│ Total                           │ 84.34%   │ 83.59%       │ 61.76%    │ 88.06%  │
+│ Total                           │ 84.52%   │ 81.23%       │ 66.18%    │ 97.83%  │
 ╰─────────────────────────────────+──────────+──────────────+────────────+─────────╯
 ```
 

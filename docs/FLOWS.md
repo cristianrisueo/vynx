@@ -911,6 +911,129 @@ _allocateIdle();
 
 ---
 
+## 6. Flujos del Router (Multi-Token)
+
+### Descripción General
+
+El Router permite depositar y retirar usando ETH nativo o cualquier ERC20 con pool de Uniswap V3, sin necesidad de tener WETH previamente. El Router swapea el token a WETH, deposita en el Vault, y el usuario recibe shares directamente.
+
+### Flujo: Depositar USDC vía Router
+
+**Escenario**: Alice tiene 5000 USDC y quiere depositar en VynX sin tener que comprar WETH manualmente.
+
+```
+┌─────────┐          ┌──────────┐          ┌────────────┐          ┌──────────┐
+│ Alice   │          │  Router  │          │ Uniswap V3 │          │  Vault   │
+└────┬────┘          └────┬─────┘          └─────┬──────┘          └────┬─────┘
+     │                    │                      │                       │
+     │ 1. approve(router) │                      │                       │
+     │ ───────────────────>                      │                       │
+     │                    │                      │                       │
+     │ 2. zapDepositERC20 │                      │                       │
+     │    (USDC, 5000e6)  │                      │                       │
+     │ ───────────────────>                      │                       │
+     │                    │                      │                       │
+     │                    │ 3. transferFrom      │                       │
+     │                    │    (alice → router)  │                       │
+     │<────────────────────                      │                       │
+     │                    │                      │                       │
+     │                    │ 4. approve(uniswap)  │                       │
+     │                    │ ────────────────────>│                       │
+     │                    │                      │                       │
+     │                    │ 5. exactInputSingle  │                       │
+     │                    │    USDC → WETH       │                       │
+     │                    │ ────────────────────>│                       │
+     │                    │<─ 2.1 WETH ──────────│                       │
+     │                    │                      │                       │
+     │                    │ 6. vault.deposit(2.1 WETH, alice)             │
+     │                    │ ─────────────────────────────────────────────>│
+     │<─ shares ──────────────────────────────────────────────────────────│
+     │                    │                      │                       │
+     │                    │ 7. balance check     │                       │
+     │                    │    (must be 0)       │                       │
+     │                    │                      │                       │
+```
+
+**Estado final:**
+- Alice gastó: 5000 USDC
+- Alice recibió: ~2.1 shares del vault (equivalente a ~2.1 WETH depositado)
+- Router balance: 0 (stateless verificado)
+
+### Flujo: Retirar a ETH nativo vía Router
+
+**Escenario**: Alice tiene shares y quiere retirar en ETH nativo (no WETH).
+
+```
+┌─────────┐          ┌──────────┐          ┌──────────┐
+│ Alice   │          │  Router  │          │  Vault   │
+└────┬────┘          └────┬─────┘          └────┬─────┘
+     │                    │                      │
+     │ 1. vault.approve   │                      │
+     │    (router, shares)│                      │
+     │ ───────────────────>                      │
+     │                    │                      │
+     │ 2. zapWithdrawETH  │                      │
+     │    (shares)        │                      │
+     │ ───────────────────>                      │
+     │                    │                      │
+     │                    │ 3. transferFrom      │
+     │                    │    (alice → router)  │
+     │<────────────────────                      │
+     │                    │                      │
+     │                    │ 4. vault.redeem      │
+     │                    │    (shares, router)  │
+     │                    │ ────────────────────>│
+     │                    │<─ WETH ──────────────│
+     │                    │                      │
+     │                    │ 5. WETH.withdraw()   │
+     │                    │    (unwrap)          │
+     │                    │                      │
+     │                    │ 6. transfer ETH      │
+     │<─ ETH ──────────────                      │
+     │                    │                      │
+     │                    │ 7. balance check     │
+     │                    │    (must be 0)       │
+     │                    │                      │
+```
+
+**Estado final:**
+- Alice quemó: shares
+- Alice recibió: ETH nativo (no WETH)
+- Router balance: 0 WETH, 0 ETH (stateless verificado)
+
+### Ejemplo Numérico: Depósito Multi-Token Round-Trip
+
+**Setup:** Alice deposita 5000 USDC → retira en DAI (tokens diferentes).
+
+**1. Depósito (USDC → WETH → shares)**
+```
+Alice tiene: 5000 USDC
+Pool USDC/WETH (Uniswap V3, fee 0.05%): 1 USDC ≈ 0.00042 WETH
+
+zapDepositERC20(USDC, 5000e6, 500, min_weth_out):
+  - Swap: 5000 USDC → 2.1 WETH (slippage + fee ≈ 0.1%)
+  - Deposit: 2.1 WETH → 2.1 shares (ratio 1:1 primer depósito)
+
+Alice recibe: 2.1 shares
+Router balance: 0 (stateless)
+```
+
+**2. Retiro (shares → WETH → DAI)**
+```
+Alice tiene: 2.1 shares
+Pool WETH/DAI (Uniswap V3, fee 0.05%): 1 WETH ≈ 2380 DAI
+
+zapWithdrawERC20(2.1 shares, DAI, 500, min_dai_out):
+  - Redeem: 2.1 shares → 2.1 WETH
+  - Swap: 2.1 WETH → 4998 DAI (slippage + fee ≈ 0.1%)
+
+Alice recibe: 4998 DAI
+Alice gastó neto: 2 USDC (slippage + fees de dos swaps)
+Router balance: 0 WETH, 0 DAI (stateless)
+```
+
+---
+
 ## Resumen de Flujos
 
 | Flujo | Trigger | Auto/Manual | Gas Optimization | Fee |
@@ -920,6 +1043,8 @@ _allocateIdle();
 | **Harvest** | Keeper/Cualquiera | Manual (incentivizado) | Fail-safe, auto-compound | 20% perf fee + 1% keeper |
 | **Rebalance** | APY cambia > 2% | Manual (keeper/cualquiera) | Solo si APY diff >= threshold | Ninguna |
 | **Idle Allocate** | idle >= threshold | Auto en deposit, o manual | Amortiza gas entre usuarios | Ninguna |
+| **Router Deposit** | Usuario con ERC20/ETH | Manual (usuario llama) | Swap + deposit en 1 tx | Slippage Uniswap (0.05-1%) |
+| **Router Withdraw** | Usuario quiere ERC20/ETH | Manual (usuario llama) | Redeem + swap en 1 tx | Slippage Uniswap (0.05-1%) |
 
 ---
 

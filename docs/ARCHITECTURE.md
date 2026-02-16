@@ -1,6 +1,6 @@
 # Arquitectura del Sistema
 
-Este documento describe la arquitectura de alto nivel de VynX V1, explicando la jerarquía de contratos, el flujo de ownership, las decisiones de diseño clave y cómo circula el WETH a través del sistema.
+Este documento describe la arquitectura de alto nivel de VynX V2, explicando la jerarquía de contratos, el flujo de ownership, las decisiones de diseño clave, el Router periférico multi-token y cómo circula el WETH a través del sistema.
 
 ## Visión General
 
@@ -14,7 +14,7 @@ Los usuarios que quieren maximizar su yield en DeFi enfrentan varios desafíos:
 4. **Riesgo de protocolo único**: Estar 100% en un solo protocolo aumenta el riesgo
 5. **Rewards sin cosechar**: Protocolos como Aave y Compound emiten reward tokens que hay que claimear, swapear y reinvertir manualmente
 
-VynX V1 resuelve estos problemas mediante:
+VynX V2 resuelve estos problemas mediante:
 
 - **Agregación automatizada**: Los usuarios depositan una vez y el protocolo gestiona múltiples estrategias
 - **Weighted allocation**: Distribución inteligente basada en APY (mayor rendimiento = mayor porcentaje)
@@ -29,8 +29,23 @@ VynX V1 resuelve estos problemas mediante:
 ```
 Usuario (EOA)
     |
-    | deposit(WETH) / withdraw(WETH)
-    v
+    |─── deposit(WETH) / withdraw(WETH) ──────────────────────────┐
+    |                                                              |
+    | zapDepositETH() / zapDepositERC20()                          |
+    | zapWithdrawETH() / zapWithdrawERC20()                        |
+    v                                                              |
+┌─────────────────────────────────────────────────────┐            |
+│              Router (Periphery)                     │            |
+│  - Wrap ETH → WETH                                  │            |
+│  - Swap ERC20 → WETH (Uniswap V3)                  │            |
+│  - Swap WETH → ERC20 (Uniswap V3)                  │            |
+│  - Unwrap WETH → ETH                                │            |
+│  - Stateless (nunca retiene fondos)                 │            |
+│  - ReentrancyGuard + slippage protection            │            |
+└─────────────────────────────────────────────────────┘            |
+    |                                                              |
+    | vault.deposit(WETH) / vault.redeem(shares)                   |
+    v                                                              v
 ┌─────────────────────────────────────────────────────┐
 │              Vault (ERC4626)                        │
 │  - Mintea/quema shares (vxWETH)                     │
@@ -72,7 +87,9 @@ Usuario (EOA)
 │         Uniswap V3 Router                │
 │  - Swap AAVE → WETH (0.3% fee)          │
 │  - Swap COMP → WETH (0.3% fee)          │
-│  - Max slippage: 1%                      │
+│  - Swap ERC20 ↔ WETH (Router, fee var.) │
+│  - Max slippage: 1% (strategies)        │
+│  - Slippage configurable (Router)       │
 └──────────────────────────────────────────┘
 ```
 
@@ -128,7 +145,32 @@ Usuario (EOA)
 - Owner: addStrategy(), removeStrategy()
 - Cualquiera: rebalance() (si es rentable)
 
-### 3. AaveStrategy.sol & CompoundStrategy.sol (Capa de Integración)
+### 3. Router.sol (Capa Periférica)
+
+**Responsabilidades:**
+- Punto de entrada multi-token para usuarios que no tienen WETH
+- Wrap ETH → WETH y deposit en el vault en una sola transacción
+- Swap ERC20 → WETH via Uniswap V3 y deposit en el vault
+- Redeem shares → unwrap WETH → ETH y enviar al usuario
+- Redeem shares → swap WETH → ERC20 via Uniswap V3 y enviar al usuario
+- Garantizar diseño stateless (nunca retiene fondos)
+
+**Hereda de:**
+- `IRouter`: Interfaz del Router (eventos y funciones)
+- `ReentrancyGuard` (OpenZeppelin): Protección contra reentrancy
+
+**Llama a:**
+- `IERC4626(vault).deposit()`: Para depositar WETH en el vault
+- `IERC4626(vault).redeem()`: Para redimir shares del vault
+- `ISwapRouter(uniswap).exactInputSingle()`: Para swaps ERC20 ↔ WETH
+- `WETH.deposit()` / `WETH.withdraw()`: Para wrap/unwrap ETH
+
+**Es llamado por:**
+- Usuarios (EOAs o contratos): zapDepositETH, zapDepositERC20, zapWithdrawETH, zapWithdrawERC20
+
+**Nota importante**: El Router es un usuario normal del Vault — no tiene privilegios especiales. Cualquiera puede interactuar directamente con el Vault si tiene WETH.
+
+### 4. AaveStrategy.sol & CompoundStrategy.sol (Capa de Integración)
 
 **Responsabilidades:**
 - Implementar interfaz `IStrategy`
@@ -290,6 +332,7 @@ StrategyManager (Contrato)
 3. **Solo manager puede llamar a strategies**: Modificador `onlyManager` protege deposit/withdraw/harvest
 4. **Cualquiera puede ejecutar rebalance**: Si pasa el check de rentabilidad en `shouldRebalance()`
 5. **Cualquiera puede ejecutar harvest**: Keepers externos reciben incentivo, oficiales no
+6. **Router sin privilegios**: El Router es un usuario normal del Vault, sin ownership ni permisos especiales. Solo interactúa con funciones públicas del Vault (deposit/redeem)
 
 ## Cadena de Llamadas
 
@@ -465,11 +508,48 @@ Keeper / Bot / Usuario
 - Pros: Más preciso
 - Contras: Más complejo, más gas por la propia comprobación, `tx.gasprice` no siempre fiable
 
+### 8. ¿Por Qué Router Periférico vs Multi-Asset Vault?
+
+**Decisión**: Crear un Router separado que swapea tokens a WETH antes de depositar, en lugar de modificar el Vault para aceptar múltiples assets directamente.
+
+**Razones**:
+- **Vault puro**: El Vault sigue siendo un ERC4626 estándar con un solo asset (WETH), fácil de auditar
+- **Separación de concerns**: La complejidad del swap vive en un contrato separado sin fondos custodiados
+- **Sin riesgo adicional al Vault**: Si el Router tiene un bug, el Vault y los fondos no se ven afectados
+- **Composabilidad**: El Router es un usuario más del Vault, otros contratos pueden integrarse directamente
+- **Trade-off**: El usuario paga slippage del swap en Uniswap V3 (0.05%-1% dependiendo del pool)
+
+**Alternativa considerada**: Vault multi-asset con oracles de precios
+- Pros: Sin slippage de swap, UX más directa
+- Contras: Requiere oracles (mayor superficie de ataque), ERC4626 compliance más compleja, auditoría más costosa
+
+### 9. ¿Por Qué Router Stateless?
+
+**Decisión**: El Router nunca retiene fondos entre transacciones. Verifica balance 0 al final de cada operación.
+
+**Razones**:
+- **Seguridad**: Si el Router es explotado, no hay fondos que robar
+- **Simplicidad**: No hay estado que gestionar ni invariantes de balance que mantener
+- **Gas**: Sin storage writes para tracking de balances
+- **Trade-off**: Requiere balance check al final (mínimo gas extra), `receive()` solo acepta ETH del WETH contract
+
+**Patrón**:
+```solidity
+// Al final de cada función:
+if (IERC20(weth).balanceOf(address(this)) != 0) revert Router__FundsStuck();
+```
+
 ## Flujo de WETH
 
 ### Estados del WETH en el Sistema
 
 ```
+0. Router (temporal, stateless)
+   └─> ETH recibido → wrap a WETH → deposit en vault (no retiene)
+   └─> ERC20 recibido → swap a WETH (Uniswap V3) → deposit en vault (no retiene)
+   └─> Shares redimidas → WETH recibido → unwrap a ETH → enviar al usuario
+   └─> Shares redimidas → WETH recibido → swap a ERC20 (Uniswap V3) → enviar al usuario
+
 1. Usuario EOA
    └─> WETH en wallet del usuario
 
@@ -564,7 +644,7 @@ Harvest ejecutado (rewards acumulados):
 
 ## Limitaciones Conocidas
 
-1. **Solo WETH**: Arquitectura actual no soporta multi-asset (planificado para v2)
+1. **Solo WETH en el Vault**: El Vault solo acepta WETH nativamente. Otros tokens requieren pasar por el Router
 2. **Rebalancing manual**: Requiere keepers externos (no automático on-chain)
 3. **Weighted allocation v1**: Algoritmo básico proporcional a APY (machine learning en v3?)
 4. **Single vault owner**: Centralización del ownership (multisig en producción)
@@ -572,6 +652,8 @@ Harvest ejecutado (rewards acumulados):
 6. **Treasury shares ilíquidas**: El treasury recibe shares que no puede vender fácilmente sin diluir a holders
 7. **Harvest depende de liquidez Uniswap**: Si no hay liquidez AAVE/WETH o COMP/WETH, el swap falla
 8. **Max 10 estrategias**: Límite hard-coded en StrategyManager para prevenir gas DoS en loops
+9. **Router depende de liquidez Uniswap V3**: Si no hay pool para un token con WETH, el Router no puede operar con ese token
+10. **Slippage del Router**: El swap de ERC20 a WETH incurre en slippage de Uniswap V3 (0.05%-1% según pool fee tier)
 
 ---
 

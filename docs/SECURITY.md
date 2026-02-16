@@ -38,7 +38,7 @@ El protocolo VynX V1 **confía explícitamente** en los siguientes componentes e
 
 ### Uniswap V3
 
-**Nivel de confianza**: Alto
+**Nivel de confianza**: Alto (usado por strategies para harvest Y por Router para swaps multi-token)
 
 **Razones:**
 - DEX más establecido de Ethereum
@@ -48,7 +48,8 @@ El protocolo VynX V1 **confía explícitamente** en los siguientes componentes e
 **Riesgos aceptados:**
 - Si Uniswap tiene un bug, los swaps de rewards durante harvest podrían fallar o devolver menos WETH
 - Si no hay liquidez suficiente en pools AAVE/WETH o COMP/WETH, harvest falla
-- Mitigación: Slippage max del 1%, fail-safe en StrategyManager (si harvest falla, continúa con otras estrategias)
+- Router depende de pools ERC20/WETH: si no hay pool o liquidez insuficiente, zapDeposit/zapWithdraw fallan
+- Mitigación: Slippage max del 1% (strategies), configurable (Router), fail-safe en StrategyManager
 
 ### OpenZeppelin Contracts
 
@@ -320,7 +321,62 @@ uint256 min_amount_out = (claimed * 9900) / 10000;
 
 ---
 
-### 2.7 Withdrawal Rounding
+### 2.7 Router Specific Risks
+
+**Descripción**: Riesgos únicos del Router periférico multi-token.
+
+**Vectores considerados:**
+
+1. **Reentrancy via receive()**
+```solidity
+// Escenario: Atacante intenta reentrar durante zapWithdrawETH
+// cuando el Router llama .call{value}(eth_out) al atacante
+
+// Mitigación implementada:
+// - ReentrancyGuard en TODAS las funciones públicas (zapDeposit*, zapWithdraw*)
+// - receive() solo acepta ETH del WETH contract (revert si msg.sender != weth)
+// - CEI pattern: balance checks al final
+```
+
+2. **Fondos atrapados en Router**
+```solidity
+// Escenario: Bug en código deja WETH/ERC20 en el Router
+
+// Mitigación implementada:
+// - Balance check al final de cada función:
+//   if (IERC20(weth).balanceOf(address(this)) != 0) revert Router__FundsStuck();
+// - Para zapWithdrawERC20:
+//   if (IERC20(token_out).balanceOf(address(this)) != 0) revert Router__FundsStuck();
+// - Si check falla, tx revierte completamente (no hay fondos atrapados)
+```
+
+3. **Sandwich attacks en swaps del Router**
+```solidity
+// Escenario: MEV bot detecta zapDepositERC20 grande
+// Front-runs comprando WETH, usuario paga peor precio, back-runs vendiendo
+
+// Mitigación parcial:
+// - Usuario especifica min_weth_out (protección de slippage)
+// - Si el sandwich excede slippage tolerance, tx revierte
+// - Limitación: Usuario aún es vulnerable a sandwich dentro del slippage permitido
+// - Recomendación: Frontends deben calcular min_weth_out conservador (0.5-1% del quote)
+```
+
+4. **WETH como intermediario (doble slippage)**
+```solidity
+// Escenario: Depositar USDC → WETH (slippage 0.1%) → Vault
+//            Retirar Vault → WETH → DAI (slippage 0.1%)
+// Total slippage: ~0.2% (dos swaps)
+
+// Trade-off aceptado:
+// - WETH como hub es estándar en DeFi (máxima liquidez)
+// - Alternativa (swap directo USDC → DAI) tendría peor liquidez
+// - Usuario explícitamente acepta slippage con min_weth_out / min_token_out
+```
+
+**Evaluación**: Mitigado (ReentrancyGuard, stateless checks, slippage protection)
+
+### 2.8 Withdrawal Rounding
 
 **Descripción**: Protocolos externos (Aave, Compound) redondean withdrawals a la baja, causando micro-diferencias entre assets solicitados y recibidos.
 
@@ -545,7 +601,28 @@ for (uint256 i = 0; i < strategies.length; i++) {
 
 ---
 
-### 3.6 Slippage Protection en Swaps
+### 3.6 Router Stateless Design
+
+**Todas las funciones del Router verifican balance 0 al final:**
+
+```solidity
+// En zapDepositETH, zapDepositERC20:
+if (IERC20(weth).balanceOf(address(this)) != 0) revert Router__FundsStuck();
+
+// En zapWithdrawERC20:
+if (IERC20(token_out).balanceOf(address(this)) != 0) revert Router__FundsStuck();
+```
+
+**Propósito:**
+- Garantiza que el Router NUNCA retiene fondos entre transacciones
+- Si hay fondos atrapados (bug), la transacción revierte completamente
+- Sin fondos custodiados = sin superficie de ataque para robo
+
+**Nota**: `zapWithdrawETH` no verifica WETH balance porque el WETH se unwrappea a ETH inmediatamente. Solo verifica que el ETH se transfirió al usuario correctamente.
+
+---
+
+### 3.7 Slippage Protection en Swaps
 
 ```solidity
 // En AaveStrategy y CompoundStrategy
@@ -562,9 +639,26 @@ uniswap_router.exactInputSingle(
 ```
 
 **Propósito:**
-- Previene sandwich attacks (máximo 1% de impacto)
+- Previene sandwich attacks (máximo 1% de impacto en strategies)
 - Protege contra pools con baja liquidez
 - Si el swap no puede conseguir 99%+, revierte (y fail-safe continúa)
+
+**En Router (configurable por usuario):**
+
+```solidity
+// zapDepositERC20: usuario especifica min_weth_out
+uint256 weth_out = _swapToWETH(token_in, amount_in, pool_fee, min_weth_out);
+if (weth_out < min_weth_out) revert Router__SlippageExceeded();
+
+// zapWithdrawERC20: usuario especifica min_token_out
+uint256 amount_out = _swapFromWETH(weth_in, token_out, pool_fee, min_token_out);
+if (amount_out < min_token_out) revert Router__SlippageExceeded();
+```
+
+**Responsabilidad del frontend:**
+- Calcular quote esperado de Uniswap Quoter
+- Aplicar tolerancia (típicamente 0.5-1%)
+- Pasar como `min_weth_out` / `min_token_out`
 
 ---
 
@@ -614,7 +708,26 @@ vault.setOfficialKeeper(keeper, true);     // Marca keepers oficiales
 
 ---
 
-### 4.2 Owner del Manager
+### 4.2 Router (Sin Privilegios)
+
+**El Router NO tiene puntos de centralización:**
+
+- **Sin owner**: El Router no tiene funciones `onlyOwner`
+- **Sin privilegios en el Vault**: Es un usuario normal (llama funciones públicas: deposit/redeem)
+- **Inmutable**: Todas las direcciones (weth, vault, swap_router) son `immutable`
+- **Sin upgrades**: El Router no es upgradeable
+- **Stateless**: No custodia fondos → sin riesgo de robo incluso si hay bug
+
+**Si el Router tiene un bug:**
+- Worst case: Un usuario pierde fondos en UNA transacción (la que ejecuta)
+- El Vault y los fondos de otros usuarios NO se ven afectados
+- Se puede desplegar un nuevo Router sin afectar al Vault
+
+**Esto es intencional**: El Router es desechable y reemplazable. El Vault es el core crítico.
+
+---
+
+### 4.3 Owner del Manager
 
 **Puede:**
 
@@ -656,7 +769,7 @@ manager.setRebalanceThreshold(0);           // Permite rebalances sin diferencia
 
 ---
 
-### 4.3 Single Point of Failure
+### 4.4 Single Point of Failure
 
 **Escenario crítico:**
 ```
@@ -797,7 +910,25 @@ Ejemplo:
 
 ---
 
-### 5.7 Max 10 Estrategias
+### 5.7 Router Depende de Liquidez Uniswap V3
+
+**Limitación:**
+- Router solo puede operar con tokens que tengan pool de Uniswap V3 con WETH
+- Si un pool no existe o no tiene liquidez suficiente, zapDeposit/zapWithdraw falla
+
+**Tokens soportados típicamente:**
+- Stablecoins: USDC, USDT, DAI (pools 0.05% muy líquidos)
+- Blue chips: WBTC, LINK, UNI (pools 0.3% líquidos)
+- Otros ERC20 con pool WETH: depende de liquidez
+
+**Mitigaciones:**
+- Slippage protection: si no hay liquidez, swap revierte (usuario no pierde fondos)
+- Pool fee configurable: frontend elige el pool más líquido (100, 500, 3000, 10000 bps)
+- Fallback: usuarios siempre pueden comprar WETH manualmente y usar vault.deposit() directo
+
+---
+
+### 5.8 Max 10 Estrategias
 
 **Limitación:**
 - Máximo 10 estrategias activas simultáneamente (hard-coded)
