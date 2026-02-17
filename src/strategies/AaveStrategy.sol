@@ -7,7 +7,7 @@ import {IPool} from "@aave/contracts/interfaces/IPool.sol";
 import {IAToken} from "@aave/contracts/interfaces/IAToken.sol";
 import {IRewardsController} from "@aave/periphery/contracts/rewards/interfaces/IRewardsController.sol";
 import {DataTypes} from "@aave/contracts/protocol/libraries/types/DataTypes.sol";
-import {IStrategy} from "../interfaces/core/IStrategy.sol";
+import {IStrategy} from "../interfaces/strategies/IStrategy.sol";
 import {ISwapRouter} from "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 
 /**

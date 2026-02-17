@@ -3,9 +3,9 @@ pragma solidity 0.8.33;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ICometMarket} from "../interfaces/compound/ICometMarket.sol";
-import {ICometRewards} from "../interfaces/compound/ICometRewards.sol";
-import {IStrategy} from "../interfaces/core/IStrategy.sol";
+import {ICometMarket} from "../interfaces/strategies/compound/ICometMarket.sol";
+import {ICometRewards} from "../interfaces/strategies/compound/ICometRewards.sol";
+import {IStrategy} from "../interfaces/strategies/IStrategy.sol";
 import {ISwapRouter} from "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 
 /**
