@@ -217,7 +217,7 @@ contract AaveStrategy is IStrategy {
                 deadline: block.timestamp, // A ejecutar en este bloque
                 amountIn: claimed_amounts[0], // Cantidad del token A a swapear
                 amountOutMinimum: min_amount_out, // Mínima cantidad esperada del Token B
-                sqrtPriceLimitX96: 0 // Ni puta idea
+                sqrtPriceLimitX96: 0 // Sin límite de precio
             });
 
             // Realiza la llamada. Si todo va bien reinvierte los assets obtenidos tras el swap, devuelve
