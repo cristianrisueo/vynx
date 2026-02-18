@@ -59,4 +59,17 @@ interface ICurvePool {
      * @return Dirección del token
      */
     function coins(uint256 _i) external view returns (address);
+
+    /**
+     * @notice Intercambia stETH por ETH (o viceversa) dentro del pool
+     * @dev La función es payable porque también soporta ETH como token de entrada (i=0)
+     *      Para stETH → ETH: i=1, j=0, El ETH se envía al caller
+     *      Para ETH → stETH: i=0, j=1, Se envía ETH en el msg.value
+     * @param i Índice del token de entrada (0=ETH, 1=stETH)
+     * @param j Índice del token de salida (0=ETH, 1=stETH)
+     * @param dx Cantidad del token de entrada
+     * @param min_dy Cantidad mínima del token de salida (slippage protection)
+     * @return Cantidad del token de salida recibida
+     */
+    function exchange(int128 i, int128 j, uint256 dx, uint256 min_dy) external payable returns (uint256);
 }
