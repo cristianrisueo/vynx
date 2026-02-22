@@ -493,6 +493,63 @@ contract StrategyManager is IStrategyManager, Ownable {
         _calculateTargetAllocation();
     }
 
+    //* Funcion de emergencia: Drenado completo de estrategias en caso de bug critico (onlyOwner)
+
+    /**
+     * @notice Retira el TVL de todas las estrategias al vault para que los usuarios lo retiren
+     * @dev onlyOwner y sin timelock. En caso de bug cada segundo cuenta
+     *
+     * @dev Usa try-catch para evitar que una estrategia bugueada bloquee el rescate del resto
+     *      Si una estrategia falla, emite HarvestFailed y continua con las demas
+     *      El owner/equipo debe gestionar la estrategia problemática manualmente por separado (putadón)
+     *
+     * @dev SECUENCIA DE EMERGENCIA OBLIGATORIA (3 transacciones separadas, no atomicas):
+     *      1. vault.pause()            - Detiene nuevos depositos (withdraw sigue habilitado)
+     *      2. manager.emergencyExit()  - Drena estrategias y transfiere WETH al vault
+     *      3. vault.syncIdleBuffer()   - Reconcilia idle_buffer con el balance real del vault
+     *
+     * @dev ADVERTENCIA: Si Vault y Manager tienen owners distintos, cada owner ejecuta su paso
+     *      Si emergencyExit() revierte completamente, el vault queda pausado pero los fondos
+     *      permanecen en estrategias — ningun asset se pierde. Hay que diagnosticar, retirar manualmente
+     *      y devolver a usuarios mediante algún mecanismo (que dios me libre de llamar esta función)
+     *
+     * @dev El objetivo es que los fondos se muevan de las estrategias al vault y los usuarios retiren, mientras
+     *      el owner/equipo crea una nueva versión y hace redeploy para que depositen. Prioridad = No perder pasta
+     */
+    function emergencyExit() external onlyOwner {
+        // Acumuladores: total rescatado y estrategias drenadas con exito
+        uint256 total_rescued = 0;
+        uint256 strategies_drained = 0;
+
+        // Itera todas las estrategias activas y retira la totalidad de sus assets
+        for (uint256 i = 0; i < strategies.length; i++) {
+            // Obtiene el balance de la estrategia i
+            IStrategy strategy = strategies[i];
+            uint256 strategy_balance = strategy.totalAssets();
+
+            // Si la estrategia no tiene fondos, omite esta iteracion
+            if (strategy_balance == 0) continue;
+
+            // Intenta retirar la totalidad de los assets de la estrategia. Si hay errores los emite y continua
+            try strategy.withdraw(strategy_balance) returns (uint256 actual_withdrawn) {
+                total_rescued += actual_withdrawn;
+                strategies_drained++;
+            } catch Error(string memory reason) {
+                emit HarvestFailed(address(strategy), reason);
+            } catch {
+                emit HarvestFailed(address(strategy), "EmergencyExit: unknown error");
+            }
+        }
+
+        // Transfiere todo lo rescatado al vault en una sola transferencia
+        if (total_rescued > 0) {
+            IERC20(asset).safeTransfer(vault, total_rescued);
+        }
+
+        // Emite evento con la información del retiro: Timestamp, totalAssets, estrategias
+        emit EmergencyExit(block.timestamp, total_rescued, strategies_drained);
+    }
+
     //* Funciones de consulta: Check de rebalanceo, TVL del protocolo, stats y count de estrategias
 
     /**

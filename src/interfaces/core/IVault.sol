@@ -71,6 +71,13 @@ interface IVault is IERC4626 {
     event IdleAllocated(uint256 amount);
 
     /**
+     * @notice Emitido cuando se reconcilia idle_buffer con el balance real del vault (tras emergency exits)
+     * @param old_buffer Valor de idle_buffer antes de la sincronización
+     * @param new_buffer Valor de idle_buffer después de la sincronización (balance real de WETH)
+     */
+    event IdleBufferSynced(uint256 old_buffer, uint256 new_buffer);
+
+    /**
      * @notice Emitido cuando se actualiza la dirección del strategy manager
      * @param new_manager Nueva dirección del strategy manager que gestionará las estrategias
      */
@@ -242,6 +249,12 @@ interface IVault is IERC4626 {
      * @param new_incentive Nuevo incentivo en basis points (debe ser <= BASIS_POINTS)
      */
     function setKeeperIncentive(uint256 new_incentive) external;
+
+    /**
+     * @notice Reconcilia idle_buffer con el balance real de WETH del contrato
+     * @dev Solo puede ser llamada por el owner. Ejecutado después de emergencyExit() del manager
+     */
+    function syncIdleBuffer() external;
 
     //* Funciones de consulta - Getters de parámetros y treaury del protocolo
 

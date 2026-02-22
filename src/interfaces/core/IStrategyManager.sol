@@ -85,6 +85,14 @@ interface IStrategyManager {
      */
     event Initialized(address indexed vault);
 
+    /**
+     * @notice Emitido cuando se ejecuta un emergency exit retirando el TVL de las estrategias al vault
+     * @param timestamp Timestamp del bloque en que se ejecutó el emergency exit
+     * @param total_rescued Total de assets rescatados y transferidos al vault
+     * @param strategies_drained Número de estrategias drenadas exitosamente
+     */
+    event EmergencyExit(uint256 timestamp, uint256 total_rescued, uint256 strategies_drained);
+
     //* Funciones principales
 
     /**
@@ -141,6 +149,15 @@ interface IStrategyManager {
      * @param index Índice de la estrategia en el array de estrategias activas
      */
     function removeStrategy(uint256 index) external;
+
+    /**
+     * @notice Drena todas las estrategias activas transfiriendo assets al vault en caso de emergencia
+     * @dev Solo puede ser llamada por el owner. Sin timelock: en emergencias cada segundo cuenta
+     * @dev Usa try-catch: si una estrategia falla, continua con las demas y emite HarvestFailed
+     *      Tras ejecutar, llamar a vault.syncIdleBuffer() para reconciliar el accounting
+     * @dev Secuencia OBLIGATORIA: vault.pause() → manager.emergencyExit() → vault.syncIdleBuffer()
+     */
+    function emergencyExit() external;
 
     //* Funciones de consulta
 

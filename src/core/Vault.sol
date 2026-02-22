@@ -269,7 +269,6 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
     function withdraw(uint256 assets, address receiver, address owner)
         public
         override(ERC4626, IERC4626)
-        whenNotPaused
         returns (uint256 shares)
     {
         // Calcula shares a quemar para retirar esos assets (ERC4626 standard)
@@ -293,7 +292,6 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
     function redeem(uint256 shares, address receiver, address owner)
         public
         override(ERC4626, IERC4626)
-        whenNotPaused
         returns (uint256 assets)
     {
         // Calcula assets a retirar por esos shares (ERC4626 standard)
@@ -569,11 +567,13 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
         keeper_incentive = new_incentive;
     }
 
-    //* Funciones administrativas: Emergency stop y resume del protocolo (onlyOwner)
+    //* Funciones de emergencia: Stops y reconciliación de idle buffer tras emergency exit (onlyOwner)
 
     /**
      * @notice Pausa el vault (emergency stop)
-     * @dev Solo el owner puede pausar. Bloquea deposits/withdrawals/harvest/allocate
+     * @dev Solo el owner puede pausar. Bloquea nuevos depositos (deposit, mint), harvest
+     *      y allocateIdle. Los retiros (withdraw, redeem) permanecen habilitados: un usuario
+     *      siempre debe poder recuperar sus fondos, independientemente del estado del vault
      */
     function pause() external onlyOwner {
         _pause();
@@ -585,6 +585,29 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
      */
     function unpause() external onlyOwner {
         _unpause();
+    }
+
+    /**
+     * @notice Reconcilia idle_buffer con el balance real de WETH del contrato
+     *
+     * @dev onlyOwner. Necesario despues de emergencyExit() del manager, que transfiere WETH
+     *      al vault directamente sin pasar por deposit() ni _allocateIdle(), desincronizando
+     *      idle_buffer y haciendo que totalAssets() sea incorrecto hasta la reconciliacion
+     *      Si no sincronizamos, tras un emergencyExit totalAssets no será correcto y los retiros
+     *      fallarán en un punto por desincronización de tesorería.
+     */
+    function syncIdleBuffer() external onlyOwner {
+        // Recoge el valor anterior para el evento
+        uint256 old_buffer = idle_buffer;
+
+        // Obtiene el balance del contrato de WETH
+        uint256 real_balance = IERC20(asset()).balanceOf(address(this));
+
+        // Actualiza idle_buffer con el balance real (total assets = idle + estrategias - 0 tras exit)
+        idle_buffer = real_balance;
+
+        // Emite evento con valor anterior y nuevo para trazabilidad
+        emit IdleBufferSynced(old_buffer, real_balance);
     }
 
     //* Funciones de consulta: Getters de parametros y estado del protocolo
