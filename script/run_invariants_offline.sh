@@ -48,7 +48,7 @@ ANVIL_RPC="http://127.0.0.1:${ANVIL_PORT}"
 ANVIL_PID=""
 INVARIANT_RUNS=32
 INVARIANT_DEPTH=15
-COMPUTE_UNITS_PER_SECOND=10
+COMPUTE_UNITS_PER_SECOND=1
 REQUEST_TIMEOUT=120000
 STATE_FILE="./anvil_state_temp.json"
 
@@ -108,8 +108,7 @@ cleanup() {
         lsof -ti:${ANVIL_PORT} | xargs kill -9 2>/dev/null || true
     fi
 
-    # Elimina archivos temporales
-    rm -f "$STATE_FILE" 2>/dev/null || true
+    # Elimina archivos temporales (el state_file lo mantenemos para cache)
     rm -f /tmp/anvil_offline.log /tmp/warmup.log 2>/dev/null || true
 }
 
@@ -147,20 +146,24 @@ anvil \
     --fork-block-number "$FORK_BLOCK" \
     --port "$ANVIL_PORT" \
     --compute-units-per-second "$COMPUTE_UNITS_PER_SECOND" \
+    --fork-retry-backoff 2 \
     --timeout "$REQUEST_TIMEOUT" \
+    --state "$STATE_FILE" \
     --silent \
     > /tmp/anvil_offline.log 2>&1 &
 
 ANVIL_PID=$!
 
+sleep 5
+
 # Espera a Anvil
-for i in {1..30}; do
+for i in {1..60}; do
     if curl -s -X POST "$ANVIL_RPC" -H "Content-Type: application/json" \
         --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
         >/dev/null 2>&1; then
         break
     fi
-    if [ $i -eq 30 ]; then
+    if [ $i -eq 60 ]; then
         print_error "Timeout esperando Anvil"
         cat /tmp/anvil_offline.log
         exit 1

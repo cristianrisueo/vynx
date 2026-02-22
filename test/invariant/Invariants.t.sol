@@ -3,9 +3,11 @@ pragma solidity 0.8.33;
 
 import {Test} from "forge-std/Test.sol";
 import {Vault} from "../../src/core/Vault.sol";
+import {IVault} from "../../src/interfaces/core/IVault.sol";
 import {StrategyManager} from "../../src/core/StrategyManager.sol";
+import {IStrategyManager} from "../../src/interfaces/core/IStrategyManager.sol";
 import {AaveStrategy} from "../../src/strategies/AaveStrategy.sol";
-import {CompoundStrategy} from "../../src/strategies/CompoundStrategy.sol";
+import {LidoStrategy} from "../../src/strategies/LidoStrategy.sol";
 import {Router} from "../../src/periphery/Router.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Handler} from "./Handler.sol";
@@ -26,19 +28,19 @@ contract InvariantsTest is Test {
     Vault public vault;
     StrategyManager public manager;
     AaveStrategy public aave_strategy;
-    CompoundStrategy public compound_strategy;
+    LidoStrategy public lido_strategy;
     Router public router;
     Handler public handler;
 
     /// @notice Direcciones de los contratos en Mainnet
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    address constant WSTETH = 0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0;
+    address constant STETH = 0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84;
     address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
     address constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
-    address constant COMPOUND_COMET = 0xA17581A9E3356d9A858b789D68B4d866e593aE94;
     address constant AAVE_REWARDS = 0x8164Cc65827dcFe994AB23944CBC90e0aa80bFcb;
-    address constant COMPOUND_REWARDS = 0x1B0e765F6224C21223AeA2af16c1C46E38885a40;
     address constant AAVE_TOKEN = 0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9;
-    address constant COMP_TOKEN = 0xc00e94Cb662C3520282E6f5717214004A7f26888;
+    address constant CURVE_POOL = 0xDC24316b9AE028F1497c275EB9192a3Ea0f67022;
 
     /// @notice Pool fee de Uniswap router
     uint24 constant POOL_FEE = 3000;
@@ -56,24 +58,52 @@ contract InvariantsTest is Test {
         // Crea un fork de Mainnet
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Despliega y conecta vault y manager
-        manager = new StrategyManager(WETH);
-        vault = new Vault(WETH, address(manager), address(this), makeAddr("founder"));
+        // Despliega y conecta vault y manager con parámetros del tier Balanced
+        manager = new StrategyManager(
+            WETH,
+            IStrategyManager.TierConfig({
+                max_allocation_per_strategy: 5000, // 50%
+                min_allocation_threshold: 2000, // 20%
+                rebalance_threshold: 200, // 2%
+                min_tvl_for_rebalance: 8 ether
+            })
+        );
+        vault = new Vault(
+            WETH,
+            address(manager),
+            address(this),
+            makeAddr("founder"),
+            IVault.TierConfig({
+                idle_threshold: 8 ether,
+                min_profit_for_harvest: 0.08 ether,
+                max_tvl: 1000 ether,
+                min_deposit: 0.01 ether
+            })
+        );
         manager.initialize(address(vault));
 
         // Configura al test contract como keeper oficial
         vault.setOfficialKeeper(address(this), true);
 
         // Despliega estrategias con direcciones reales de Mainnet
-        aave_strategy =
-            new AaveStrategy(address(manager), AAVE_POOL, AAVE_REWARDS, WETH, AAVE_TOKEN, UNISWAP_ROUTER, POOL_FEE);
-        compound_strategy = new CompoundStrategy(
-            address(manager), COMPOUND_COMET, COMPOUND_REWARDS, WETH, COMP_TOKEN, UNISWAP_ROUTER, POOL_FEE
+        aave_strategy = new AaveStrategy(
+            address(manager),
+            WETH,
+            AAVE_POOL,
+            AAVE_REWARDS,
+            AAVE_TOKEN,
+            UNISWAP_ROUTER,
+            POOL_FEE,
+            WSTETH,
+            WETH,
+            STETH,
+            CURVE_POOL
         );
+        lido_strategy = new LidoStrategy(address(manager), WSTETH, WETH, UNISWAP_ROUTER, uint24(500));
 
         // Conecta estrategias al manager
         manager.addStrategy(address(aave_strategy));
-        manager.addStrategy(address(compound_strategy));
+        manager.addStrategy(address(lido_strategy));
 
         // Crea actores para el handler
         actors.push(makeAddr("actor1"));

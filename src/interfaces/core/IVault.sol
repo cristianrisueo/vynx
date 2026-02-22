@@ -15,6 +15,22 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
  *        entre treasury y founder
  */
 interface IVault is IERC4626 {
+    //* Structs
+
+    /**
+     * @notice Parametros de configuracion del vault específicos del risk tier, pasados en el constructor
+     * @param idle_threshold Threshold de idle buffer para ejecutar allocateIdle
+     * @param min_profit_for_harvest Profit minimo requerido para ejecutar harvest
+     * @param max_tvl TVL maximo permitido como circuit breaker
+     * @param min_deposit Deposito minimo permitido
+     */
+    struct TierConfig {
+        uint256 idle_threshold;
+        uint256 min_profit_for_harvest;
+        uint256 max_tvl;
+        uint256 min_deposit;
+    }
+
     //* Eventos
 
     /**

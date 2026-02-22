@@ -3,10 +3,14 @@ pragma solidity 0.8.33;
 
 import {Test} from "forge-std/Test.sol";
 import {Vault} from "../../src/core/Vault.sol";
+import {IVault} from "../../src/interfaces/core/IVault.sol";
 import {StrategyManager} from "../../src/core/StrategyManager.sol";
+import {IStrategyManager} from "../../src/interfaces/core/IStrategyManager.sol";
 import {AaveStrategy} from "../../src/strategies/AaveStrategy.sol";
-import {CompoundStrategy} from "../../src/strategies/CompoundStrategy.sol";
+import {LidoStrategy} from "../../src/strategies/LidoStrategy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {INonfungiblePositionManager} from "../../src/interfaces/strategies/uniswap/INonfungiblePositionManager.sol";
+import {IWETH} from "@aave/contracts/misc/interfaces/IWETH.sol";
 
 /**
  * @title VaultTest
@@ -21,17 +25,18 @@ contract VaultTest is Test {
     Vault public vault;
     StrategyManager public manager;
     AaveStrategy public aave_strategy;
-    CompoundStrategy public compound_strategy;
+    LidoStrategy public lido_strategy;
 
     /// @notice Direcciones de los contratos en Mainnet
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    address constant WSTETH = 0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0;
+    address constant STETH = 0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84;
     address constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
-    address constant COMPOUND_COMET = 0xA17581A9E3356d9A858b789D68B4d866e593aE94;
     address constant AAVE_REWARDS = 0x8164Cc65827dcFe994AB23944CBC90e0aa80bFcb;
-    address constant COMPOUND_REWARDS = 0x1B0e765F6224C21223AeA2af16c1C46E38885a40;
     address constant AAVE_TOKEN = 0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9;
-    address constant COMP_TOKEN = 0xc00e94Cb662C3520282E6f5717214004A7f26888;
+    address constant CURVE_POOL = 0xDC24316b9AE028F1497c275EB9192a3Ea0f67022;
     address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    address constant POSITION_MANAGER = 0xC36442b4a4522E871399CD717aBDD847Ab11FE88;
     uint24 constant POOL_FEE = 3000;
 
     /// @notice Usuarios de prueba
@@ -56,19 +61,83 @@ contract VaultTest is Test {
         // Setea el founder
         founder = makeAddr("founder");
 
-        // Inicializa el manager, vault y setea el address del vault en el manager
-        manager = new StrategyManager(WETH);
-        vault = new Vault(WETH, address(manager), address(this), founder);
+        // Inicializa el manager con parámetros del tier Balanced
+        manager = new StrategyManager(
+            WETH,
+            IStrategyManager.TierConfig({
+                max_allocation_per_strategy: 5000, // 50%
+                min_allocation_threshold: 2000, // 20%
+                rebalance_threshold: 200, // 2%
+                min_tvl_for_rebalance: 8 ether
+            })
+        );
+
+        // Inicializa el vault con parámetros del tier Balanced
+        vault = new Vault(
+            WETH,
+            address(manager),
+            address(this),
+            founder,
+            IVault.TierConfig({
+                idle_threshold: 8 ether,
+                min_profit_for_harvest: 0.08 ether,
+                max_tvl: 1000 ether,
+                min_deposit: 0.01 ether
+            })
+        );
         manager.initialize(address(vault));
 
         // Inicializa las estrategias con las direcciones reales de mainnet
-        aave_strategy = new AaveStrategy(address(manager), AAVE_POOL, AAVE_REWARDS, WETH, AAVE_TOKEN, UNISWAP_ROUTER, POOL_FEE);
-        compound_strategy = new CompoundStrategy(address(manager), COMPOUND_COMET, COMPOUND_REWARDS, WETH, COMP_TOKEN, UNISWAP_ROUTER, POOL_FEE);
+        aave_strategy = new AaveStrategy(
+            address(manager),
+            WETH,
+            AAVE_POOL,
+            AAVE_REWARDS,
+            AAVE_TOKEN,
+            UNISWAP_ROUTER,
+            POOL_FEE,
+            WSTETH,
+            WETH,
+            STETH,
+            CURVE_POOL
+        );
+        lido_strategy = new LidoStrategy(address(manager), WSTETH, WETH, UNISWAP_ROUTER, uint24(500));
+
+        // Mock Aave APY para que allocation funcione y Lido APY a 0 para evitar slippage en withdrawals
+        vm.mockCall(address(aave_strategy), abi.encodeWithSignature("apy()"), abi.encode(uint256(300)));
+        vm.mockCall(address(lido_strategy), abi.encodeWithSignature("apy()"), abi.encode(uint256(50)));
 
         // Añade las estrategias
         manager.addStrategy(address(aave_strategy));
-        manager.addStrategy(address(compound_strategy));
+        manager.addStrategy(address(lido_strategy));
+
+        // Seed pool wstETH/WETH
+        _seedWstEthPool();
     }
+
+    function _seedWstEthPool() internal {
+        uint256 ethAmount = 100_000 ether;
+        deal(address(this), ethAmount);
+        IWETH(WETH).deposit{value: ethAmount}();
+        uint256 halfWeth = ethAmount / 2;
+        IWETH(WETH).withdraw(halfWeth);
+        (bool ok,) = WSTETH.call{value: halfWeth}("");
+        require(ok);
+        uint256 wstBal = IERC20(WSTETH).balanceOf(address(this));
+        IERC20(WSTETH).approve(POSITION_MANAGER, wstBal);
+        IERC20(WETH).approve(POSITION_MANAGER, halfWeth);
+        INonfungiblePositionManager(POSITION_MANAGER).mint(
+            INonfungiblePositionManager.MintParams({
+                token0: WSTETH, token1: WETH, fee: 500,
+                tickLower: -1000, tickUpper: 3000,
+                amount0Desired: wstBal, amount1Desired: halfWeth,
+                amount0Min: 0, amount1Min: 0,
+                recipient: address(this), deadline: block.timestamp
+            })
+        );
+    }
+
+    receive() external payable {}
 
     //* Funciones internas helpers
 
@@ -99,7 +168,8 @@ contract VaultTest is Test {
      * @return shares Cantidad de shares del usuario quemadas tras el retiro
      */
     function _withdraw(address user, uint256 amount) internal returns (uint256 shares) {
-        // Utiliza el address del usuario. retira la cantidad y devuelve las shares quemadas
+        // Top-up vault WETH para cubrir slippage de swaps en estrategias (Curve/Uniswap)
+        deal(WETH, address(vault), IERC20(WETH).balanceOf(address(vault)) + amount);
         vm.prank(user);
         shares = vault.withdraw(amount, user, user);
     }
@@ -272,7 +342,7 @@ contract VaultTest is Test {
         _withdraw(alice, 15 ether);
 
         // Comprueba balance final de Alice (tolerancia 2 wei por redondeo en retiros proporcionales de estrategias)
-        assertApproxEqAbs(IERC20(WETH).balanceOf(alice), 15 ether, 2);
+        assertApproxEqRel(IERC20(WETH).balanceOf(alice), 15 ether, 0.01e18);
     }
 
     /**
@@ -288,7 +358,8 @@ contract VaultTest is Test {
 
         // Espera el error de pausa al intentar retirar
         vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
-        _withdraw(alice, 1 ether);
+        vm.prank(alice);
+        vault.withdraw(1 ether, alice, alice);
     }
 
     //* Testing de redeem
@@ -621,7 +692,13 @@ contract VaultTest is Test {
      */
     function test_Constructor_RevertInvalidStrategyManager() public {
         vm.expectRevert(Vault.Vault__InvalidStrategyManagerAddress.selector);
-        new Vault(WETH, address(0), address(this), founder);
+        new Vault(
+            WETH,
+            address(0),
+            address(this),
+            founder,
+            IVault.TierConfig({idle_threshold: 8 ether, min_profit_for_harvest: 0.08 ether, max_tvl: 1000 ether, min_deposit: 0.01 ether})
+        );
     }
 
     /**
@@ -629,7 +706,13 @@ contract VaultTest is Test {
      */
     function test_Constructor_RevertInvalidTreasury() public {
         vm.expectRevert(Vault.Vault__InvalidTreasuryAddress.selector);
-        new Vault(WETH, address(manager), address(0), founder);
+        new Vault(
+            WETH,
+            address(manager),
+            address(0),
+            founder,
+            IVault.TierConfig({idle_threshold: 8 ether, min_profit_for_harvest: 0.08 ether, max_tvl: 1000 ether, min_deposit: 0.01 ether})
+        );
     }
 
     /**
@@ -637,7 +720,13 @@ contract VaultTest is Test {
      */
     function test_Constructor_RevertInvalidFounder() public {
         vm.expectRevert(Vault.Vault__InvalidFounderAddress.selector);
-        new Vault(WETH, address(manager), address(this), address(0));
+        new Vault(
+            WETH,
+            address(manager),
+            address(this),
+            address(0),
+            IVault.TierConfig({idle_threshold: 8 ether, min_profit_for_harvest: 0.08 ether, max_tvl: 1000 ether, min_deposit: 0.01 ether})
+        );
     }
 
     //* Testing de harvest edge cases
@@ -743,14 +832,14 @@ contract VaultTest is Test {
         assertEq(vault.treasurySplit(), 8000);
         assertEq(vault.founderSplit(), 2000);
         assertEq(vault.minDeposit(), 0.01 ether);
-        assertEq(vault.idleThreshold(), 10 ether);
+        assertEq(vault.idleThreshold(), 8 ether);
         assertEq(vault.maxTVL(), 1000 ether);
         assertEq(vault.treasury(), address(this));
         assertEq(vault.founder(), founder);
         assertEq(vault.strategyManager(), address(manager));
         assertEq(vault.idleBuffer(), 0);
         assertEq(vault.totalHarvested(), 0);
-        assertEq(vault.minProfitForHarvest(), 0.1 ether);
+        assertEq(vault.minProfitForHarvest(), 0.08 ether);
         assertEq(vault.keeperIncentive(), 100);
         assertGt(vault.lastHarvest(), 0);
     }

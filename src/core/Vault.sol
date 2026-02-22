@@ -80,7 +80,12 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
      */
     error Vault__InvalidStrategyManagerAddress();
 
-    //* Eventos: Se heredan de la interfaz, no es necesario implementarlos
+    /**
+     * @notice Error cuando un parametro del constructor tiene un valor inválido
+     */
+    error Vault__InvalidParam();
+
+    //* Structs y eventos: Se heredan de la interfaz, no es necesario implementarlos
 
     //* Constantes
 
@@ -110,11 +115,17 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
     /// @notice Profit total (bruto) acumulado desde el inicio del vault
     uint256 public total_harvested;
 
-    //? Por que definirlo aqui y no en el constructor? Es una buena practica, dejamos el
-    //? constructor lo mas simple posible para que no haya posibles fallos en deployment
+    /// @notice Deposito minimo permitido, configurado en el constructor segun el tipo de riego del protocolo
+    uint256 public min_deposit;
+
+    /// @notice Threshold de idle buffer para ejecutar allocateIdle, configurado en el constructor segun el risk tier
+    uint256 public idle_threshold;
+
+    /// @notice TVL maximo permitido como circuit breaker, configurado en el constructor segun el risk tier
+    uint256 public max_tvl;
 
     /// @notice Profit minimo requerido para ejecutar harvest (evita harvests no rentables por gas)
-    uint256 public min_profit_for_harvest = 0.1 ether;
+    uint256 public min_profit_for_harvest;
 
     /// @notice Porcentaje de los profits generados que van al keeper externo que ejecute el harvest
     uint256 public keeper_incentive = 100;
@@ -128,15 +139,6 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
     /// @notice Porcentaje del performance fee que va al founder (2000 = 20%)
     uint256 public founder_split = 2000;
 
-    /// @notice Deposito minimo permitido (0.01 ETH en wei)
-    uint256 public min_deposit = 0.01 ether;
-
-    /// @notice Threshold de idle buffer para ejecutar allocateIdle (10 ETH)
-    uint256 public idle_threshold = 10 ether;
-
-    /// @notice TVL maximo permitido como circuit breaker (1000 ETH)
-    uint256 public max_tvl = 1000 ether;
-
     //* Constructor
 
     /**
@@ -146,8 +148,9 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
      * @param _strategyManager Direccion del strategy manager
      * @param _treasury Direccion del treasury
      * @param _founder Direccion del founder
+     * @param params Parametros operativos del vault configurables por tier
      */
-    constructor(address _asset, address _strategyManager, address _treasury, address _founder)
+    constructor(address _asset, address _strategyManager, address _treasury, address _founder, TierConfig memory params)
         ERC4626(IERC20(_asset))
         ERC20(string.concat("VynX ", ERC20(_asset).symbol(), " Vault"), string.concat("vx", ERC20(_asset).symbol()))
         Ownable(msg.sender)
@@ -157,10 +160,23 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
         if (_treasury == address(0)) revert Vault__InvalidTreasuryAddress();
         if (_founder == address(0)) revert Vault__InvalidFounderAddress();
 
+        // Valida los parametros del vault específicos de la configuración de risk tier
+        if (params.idle_threshold == 0) revert Vault__InvalidParam();
+        if (params.min_profit_for_harvest == 0) revert Vault__InvalidParam();
+        if (params.max_tvl == 0) revert Vault__InvalidParam();
+        if (params.min_deposit == 0) revert Vault__InvalidParam();
+        if (params.max_tvl <= params.idle_threshold) revert Vault__InvalidParam();
+
         // Setea las direcciones criticas del protocolo
         strategy_manager = _strategyManager;
         treasury_address = _treasury;
         founder_address = _founder;
+
+        // Asigna los parametros del tier
+        idle_threshold = params.idle_threshold;
+        min_profit_for_harvest = params.min_profit_for_harvest;
+        max_tvl = params.max_tvl;
+        min_deposit = params.min_deposit;
 
         // Inicializa timestamp del ultimo harvest
         last_harvest = block.timestamp;

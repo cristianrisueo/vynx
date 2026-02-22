@@ -4,7 +4,9 @@ pragma solidity 0.8.33;
 import {Test} from "forge-std/Test.sol";
 import {Router} from "../../src/periphery/Router.sol";
 import {Vault} from "../../src/core/Vault.sol";
+import {IVault} from "../../src/interfaces/core/IVault.sol";
 import {StrategyManager} from "../../src/core/StrategyManager.sol";
+import {IStrategyManager} from "../../src/interfaces/core/IStrategyManager.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
@@ -43,9 +45,28 @@ contract RouterTest is Test {
         // Fork de Mainnet
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Deploy protocolo
-        manager = new StrategyManager(WETH);
-        vault = new Vault(WETH, address(manager), address(this), makeAddr("founder"));
+        // Deploy protocolo con parámetros del tier Balanced
+        manager = new StrategyManager(
+            WETH,
+            IStrategyManager.TierConfig({
+                max_allocation_per_strategy: 5000, // 50%
+                min_allocation_threshold: 2000, // 20%
+                rebalance_threshold: 200, // 2%
+                min_tvl_for_rebalance: 8 ether
+            })
+        );
+        vault = new Vault(
+            WETH,
+            address(manager),
+            address(this),
+            makeAddr("founder"),
+            IVault.TierConfig({
+                idle_threshold: 8 ether,
+                min_profit_for_harvest: 0.08 ether,
+                max_tvl: 1000 ether,
+                min_deposit: 0.01 ether
+            })
+        );
         manager.initialize(address(vault));
 
         // Deploy Router

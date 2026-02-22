@@ -75,7 +75,12 @@ contract StrategyManager is IStrategyManager, Ownable {
      */
     error StrategyManager__InvalidVaultAddress();
 
-    //* Eventos: Se heredan de la interfaz, no es necesario implementarlos
+    /**
+     * @notice Error cuando un parametro del constructor tiene un valor invalido
+     */
+    error StrategyManager__InvalidParam();
+
+    //* Structs y eventos: Se heredan de la interfaz, no es necesario implementarlos
 
     //* Constantes
 
@@ -102,20 +107,17 @@ contract StrategyManager is IStrategyManager, Ownable {
     /// @notice Direccion del asset subyacente del protocolo
     address public immutable asset;
 
-    //? Por qué definirlo aquí y no en el constructor? Es una buena práctica, dejamos el
-    //? constructor lo más simple posible para que no haya posibles fallos en deployment
+    /// @notice Threshold minimo de diferencia de APY para considerar rebalance, configurado en el constructor segun el tier
+    uint256 public rebalance_threshold;
 
-    /// @notice Threshold minimo de diferencia de APY para considerar rebalance (2% en basis points)
-    uint256 public rebalance_threshold = 200;
+    /// @notice TVL minimo para ejecutar rebalance, configurado en el constructor segun el tier
+    uint256 public min_tvl_for_rebalance;
 
-    /// @notice TVL minimo para ejecutar rebalance (hasta que llegue aquí se acumula en el idle buffer)
-    uint256 public min_tvl_for_rebalance = 10 ether;
+    /// @notice Allocation maximo por estrategia en basis points, configurado en el constructor segun el tier
+    uint256 public max_allocation_per_strategy;
 
-    /// @notice Allocation maximo por estrategia en basis points (50%)
-    uint256 public max_allocation_per_strategy = 5000;
-
-    /// @notice Allocation minimo por estrategia en basis points (10%)
-    uint256 public min_allocation_threshold = 1000;
+    /// @notice Allocation minimo por estrategia en basis points, configurado en el constructor segun el tier
+    uint256 public min_allocation_threshold;
 
     //* Modificadores
 
@@ -131,13 +133,33 @@ contract StrategyManager is IStrategyManager, Ownable {
 
     /**
      * @notice Constructor del StrategyManager
-     * @dev Inicializa con la dirección del asset a gestionar
+     * @dev Inicializa con la dirección del asset a gestionar y los parametros específicos del risk tier
      * @param _asset Direccion del asset subyacente
+     * @param params Parametros operativos del manager configurables por tier
      */
-    constructor(address _asset) Ownable(msg.sender) {
+    constructor(address _asset, TierConfig memory params) Ownable(msg.sender) {
         // Comprueba que el asset no sea address(0) y setea el asset
         if (_asset == address(0)) revert StrategyManager__AssetMismatch();
         asset = _asset;
+
+        // Valida los parametros del manager específicos de la configuración de risk tier
+        if (params.max_allocation_per_strategy == 0 || params.max_allocation_per_strategy > 10000) {
+            revert StrategyManager__InvalidParam();
+        }
+        if (
+            params.min_allocation_threshold == 0
+                || params.min_allocation_threshold >= params.max_allocation_per_strategy
+        ) {
+            revert StrategyManager__InvalidParam();
+        }
+        if (params.rebalance_threshold == 0) revert StrategyManager__InvalidParam();
+        if (params.min_tvl_for_rebalance == 0) revert StrategyManager__InvalidParam();
+
+        // Asigna los parametros del tier
+        max_allocation_per_strategy = params.max_allocation_per_strategy;
+        min_allocation_threshold = params.min_allocation_threshold;
+        rebalance_threshold = params.rebalance_threshold;
+        min_tvl_for_rebalance = params.min_tvl_for_rebalance;
     }
 
     /**

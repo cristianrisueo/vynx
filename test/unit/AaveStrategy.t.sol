@@ -4,6 +4,7 @@ pragma solidity 0.8.33;
 import {Test} from "forge-std/Test.sol";
 import {AaveStrategy} from "../../src/strategies/AaveStrategy.sol";
 import {StrategyManager} from "../../src/core/StrategyManager.sol";
+import {IStrategyManager} from "../../src/interfaces/core/IStrategyManager.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
@@ -21,9 +22,12 @@ contract AaveStrategyTest is Test {
 
     /// @notice Direcciones de los contratos en Mainnet
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    address constant WSTETH = 0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0;
+    address constant STETH = 0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84;
     address constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address constant AAVE_REWARDS = 0x8164Cc65827dcFe994AB23944CBC90e0aa80bFcb;
     address constant AAVE_TOKEN = 0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9;
+    address constant CURVE_POOL = 0xDC24316b9AE028F1497c275EB9192a3Ea0f67022;
     address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
     uint24 constant POOL_FEE = 3000;
 
@@ -40,11 +44,31 @@ contract AaveStrategyTest is Test {
         // Crea un fork de Mainnet usando el endpoint de Alchemy
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Inicializa manager (necesario para la estrategia)
-        manager = new StrategyManager(WETH);
+        // Inicializa manager con parámetros del tier Balanced
+        manager = new StrategyManager(
+            WETH,
+            IStrategyManager.TierConfig({
+                max_allocation_per_strategy: 5000, // 50%
+                min_allocation_threshold: 2000, // 20%
+                rebalance_threshold: 200, // 2%
+                min_tvl_for_rebalance: 8 ether
+            })
+        );
 
-        // Inicializa la estrategia
-        strategy = new AaveStrategy(address(manager), AAVE_POOL, AAVE_REWARDS, WETH, AAVE_TOKEN, UNISWAP_ROUTER, POOL_FEE);
+        // Inicializa la estrategia con todas las dependencias V2
+        strategy = new AaveStrategy(
+            address(manager),
+            WETH,
+            AAVE_POOL,
+            AAVE_REWARDS,
+            AAVE_TOKEN,
+            UNISWAP_ROUTER,
+            POOL_FEE,
+            WSTETH,
+            WETH,
+            STETH,
+            CURVE_POOL
+        );
     }
 
     //* Funciones internas helpers
@@ -83,7 +107,7 @@ contract AaveStrategyTest is Test {
         assertApproxEqRel(strategy.totalAssets(), 10 ether, 0.001e18);
 
         // Comprueba que aTokenBalance coincida
-        assertEq(strategy.totalAssets(), strategy.aTokenBalance());
+        assertGt(strategy.totalAssets(), strategy.aTokenBalance());
     }
 
     /**
@@ -112,7 +136,7 @@ contract AaveStrategyTest is Test {
         _withdraw(5 ether);
 
         // Comprueba que el manager recibió los fondos
-        assertEq(IERC20(WETH).balanceOf(address(manager)), 5 ether);
+        assertApproxEqRel(IERC20(WETH).balanceOf(address(manager)), 5 ether, 0.01e18);
 
         // Comprueba que queda aproximadamente la mitad
         assertApproxEqRel(strategy.totalAssets(), 5 ether, 0.001e18);
@@ -130,8 +154,8 @@ contract AaveStrategyTest is Test {
         uint256 balance = strategy.totalAssets();
         _withdraw(balance);
 
-        // Comprueba que el balance sea 0
-        assertEq(strategy.totalAssets(), 0);
+        // Comprueba que el balance sea ~0 (1 wei dust posible por redondeo en Curve swap)
+        assertLe(strategy.totalAssets(), 1);
     }
 
     /**
@@ -164,7 +188,7 @@ contract AaveStrategyTest is Test {
      * @dev Comprueba que devuelva el nombre correcto
      */
     function test_Name() public view {
-        assertEq(strategy.name(), "Aave v3 Strategy");
+        assertEq(strategy.name(), "Aave v3 wstETH Strategy");
     }
 
     /**

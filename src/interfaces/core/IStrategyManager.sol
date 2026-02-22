@@ -13,6 +13,22 @@ import {IStrategy} from "../strategies/IStrategy.sol";
  *      mucho en comentarios, por si te confunde
  */
 interface IStrategyManager {
+    //* Structs
+
+    /**
+     * @notice Parametros de configuracion del manager específicos del risk tier, pasados en el constructor
+     * @param max_allocation_per_strategy Allocation maximo por estrategia en basis points
+     * @param min_allocation_threshold Allocation minimo por estrategia en basis points
+     * @param rebalance_threshold Diferencia minima de APY para considerar rebalance
+     * @param min_tvl_for_rebalance TVL minimo para ejecutar rebalance
+     */
+    struct TierConfig {
+        uint256 max_allocation_per_strategy;
+        uint256 min_allocation_threshold;
+        uint256 rebalance_threshold;
+        uint256 min_tvl_for_rebalance;
+    }
+
     //* Eventos
 
     /**
