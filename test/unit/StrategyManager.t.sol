@@ -422,6 +422,117 @@ contract StrategyManagerTest is Test {
         assertApproxEqAbs(targets[0] + targets[1], 10000, 1);
     }
 
+    //* Testing de emergencyExit
+
+    /**
+     * @notice Test de emergencyExit por non-owner
+     * @dev Comprueba que solo el owner pueda ejecutar emergencyExit
+     */
+    function test_EmergencyExit_RevertIfNotOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        manager.emergencyExit();
+    }
+
+    /**
+     * @notice Test de emergencyExit sin estrategias registradas
+     * @dev Comprueba que no revierte y emite evento con total_rescued = 0
+     */
+    function test_EmergencyExit_NoStrategies() public {
+        // Crea un manager sin estrategias
+        StrategyManager empty_manager = new StrategyManager(
+            WETH,
+            IStrategyManager.TierConfig({
+                max_allocation_per_strategy: 5000,
+                min_allocation_threshold: 2000,
+                rebalance_threshold: 200,
+                min_tvl_for_rebalance: 8 ether
+            })
+        );
+        empty_manager.initialize(address(vault));
+
+        // Debe ejecutarse sin revertir
+        vm.expectEmit(false, false, false, true);
+        emit IStrategyManager.EmergencyExit(block.timestamp, 0, 0);
+
+        empty_manager.emergencyExit();
+    }
+
+    /**
+     * @notice Test de emergencyExit con estrategias con balance 0
+     * @dev Comprueba que no revierte cuando las estrategias no tienen fondos
+     */
+    function test_EmergencyExit_ZeroBalanceStrategies() public {
+        // No allocamos nada, las estrategias tienen balance 0
+
+        // Debe ejecutarse sin revertir y transferir 0 WETH
+        vm.expectEmit(false, false, false, true);
+        emit IStrategyManager.EmergencyExit(block.timestamp, 0, 0);
+
+        manager.emergencyExit();
+
+        // El vault no debe haber recibido WETH
+        assertEq(IERC20(WETH).balanceOf(address(vault)), 0);
+    }
+
+    /**
+     * @notice Test de emergencyExit con estrategias con balance > 0
+     * @dev Comprueba que todo el WETH se transfiera al vault y el manager quede en 0
+     */
+    function test_EmergencyExit_DrainsAllStrategies() public {
+        // Alloca fondos a las estrategias
+        _allocateFromVault(100 ether);
+
+        // Guarda el balance del vault antes del exit
+        uint256 vault_balance_before = IERC20(WETH).balanceOf(address(vault));
+
+        // Ejecuta emergencyExit
+        manager.emergencyExit();
+
+        // El balance del manager debe quedar en ~0 (puede quedar polvo por redondeo)
+        assertApproxEqAbs(manager.totalAssets(), 0, 20, "Manager debe quedar vacio tras emergencyExit");
+
+        // El vault debe haber recibido WETH (total rescatado, tolerancia 1% por slippage en swaps)
+        uint256 vault_balance_after = IERC20(WETH).balanceOf(address(vault));
+        uint256 rescued = vault_balance_after - vault_balance_before;
+        assertApproxEqRel(rescued, 100 ether, 0.01e18, "Vault debe recibir ~100% de lo allocado");
+    }
+
+    /**
+     * @notice Test de emergencyExit verifica que el balance del manager queda en 0
+     * @dev Garantiza que no quedan fondos residuales en el contrato manager
+     */
+    function test_EmergencyExit_ManagerBalanceZero() public {
+        // Alloca fondos
+        _allocateFromVault(50 ether);
+
+        // Ejecuta emergencyExit
+        manager.emergencyExit();
+
+        // El balance de WETH del manager debe ser ~0 (puede quedar residuo del min_allocation_threshold
+        // que el allocator no envio a ninguna estrategia por estar por debajo del umbral minimo)
+        assertApproxEqAbs(
+            IERC20(WETH).balanceOf(address(manager)), 0, 0.01 ether, "Manager WETH balance debe ser ~0"
+        );
+    }
+
+    /**
+     * @notice Test de emergencyExit emite evento con timestamp correcto y 2 estrategias drenadas
+     * @dev Verifica que el evento EmergencyExit se emita con los datos esperados.
+     *      Solo comprobamos timestamp y strategies_drained (total_rescued depende del slippage)
+     */
+    function test_EmergencyExit_EmitsCorrectEvent() public {
+        // Alloca fondos a las estrategias
+        _allocateFromVault(100 ether);
+
+        // Espera evento EmergencyExit: check topic (true) pero no los data values exactos
+        // porque total_rescued depende del slippage de swaps en las estrategias
+        vm.expectEmit(false, false, false, false);
+        emit IStrategyManager.EmergencyExit(block.timestamp, 0, 2);
+
+        manager.emergencyExit();
+    }
+
     //* Testing de funcionalidad only owner
 
     /**

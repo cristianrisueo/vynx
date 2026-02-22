@@ -524,8 +524,10 @@ if (to_transfer < assets) {
 
 ```solidity
 // Vault
-modifier onlyOwner()        // Funciones admin (pause, setters)
-modifier whenNotPaused()    // Deposits, withdraws, harvest
+modifier onlyOwner()        // Funciones admin (pause, setters, syncIdleBuffer)
+modifier whenNotPaused()    // Deposits, mint, harvest, allocateIdle
+//                          // withdraw y redeem NO tienen whenNotPaused:
+//                          // los usuarios siempre pueden retirar sus fondos
 
 // StrategyManager
 modifier onlyOwner()        // Agregar/remover strategies, setters
@@ -638,8 +640,8 @@ uint256 public constant MAX_STRATEGIES = 10;  // Hard-coded
 contract Vault is IVault, ERC4626, Ownable, Pausable {
     function deposit(...) public whenNotPaused { }
     function mint(...) public whenNotPaused { }
-    function withdraw(...) public whenNotPaused { }
-    function redeem(...) public whenNotPaused { }
+    function withdraw(...) public override { }              // SIN whenNotPaused
+    function redeem(...) public override { }                // SIN whenNotPaused
     function harvest() external whenNotPaused { }
     function allocateIdle() external whenNotPaused { }
 
@@ -653,13 +655,19 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
 - Hack en Lido/Aave/Curve/Uniswap afecta fondos
 - Bug crítico en weighted allocation o harvest
 - Mientras se investiga comportamiento anómalo
+- **Primer paso de la secuencia de emergency exit** (ver sección 4.8)
 
 **Qué pausa:**
-- Nuevos deposits
-- Nuevos withdraws
+- Nuevos deposits (deposit, mint)
 - Harvest
 - AllocateIdle
 - No pausa rebalances (manager está separado)
+
+**Qué NO pausa (por diseño):**
+- **withdraw**: Los usuarios siempre pueden retirar sus fondos
+- **redeem**: Los usuarios siempre pueden quemar shares y recuperar assets
+
+**Principio DeFi**: La pausa bloquea inflows (depósitos) y operaciones del protocolo, pero **nunca bloquea outflows** (retiros). Un usuario siempre debe poder recuperar sus fondos independientemente del estado del vault.
 
 **Nota:** Owner del manager debería remover estrategias comprometidas durante pausa.
 
@@ -776,6 +784,53 @@ if (amount_out < min_token_out) revert Router__SlippageExceeded();
 
 ---
 
+### 4.8 Emergency Exit Mechanism
+
+El protocolo implementa un mecanismo de emergency exit que permite drenar todas las estrategias activas y devolver los fondos al vault en caso de bug crítico, exploit activo, o comportamiento anómalo en protocolos subyacentes.
+
+**Secuencia de emergencia (3 transacciones independientes):**
+
+```solidity
+// PASO 1: Pausar el vault (bloquea nuevos depósitos, harvest, allocateIdle)
+// Los retiros (withdraw/redeem) permanecen habilitados
+vault.pause();
+
+// PASO 2: Drenar todas las estrategias al vault
+// Try-catch por estrategia: si una falla, continúa con las demás
+manager.emergencyExit();
+
+// PASO 3: Reconciliar idle_buffer con el balance real de WETH
+// Necesario porque emergencyExit transfiere WETH al vault sin pasar por deposit()
+vault.syncIdleBuffer();
+```
+
+**Características de seguridad:**
+
+1. **Sin timelock**: En emergencias cada bloque expone fondos al exploit. La velocidad de respuesta prima sobre governance
+2. **Fail-safe (try-catch)**: Si una estrategia falla durante el drenaje (bug, frozen, etc.), las demás continúan. La estrategia problemática emite `HarvestFailed` y el owner la gestiona por separado
+3. **Retiros siempre habilitados**: Tras pausar, los usuarios pueden seguir retirando sus fondos. Nunca se bloquean los outflows
+4. **Accounting correcto**: `syncIdleBuffer()` reconcilia `idle_buffer` con el balance real de WETH del contrato, asegurando que `totalAssets()` y el exchange rate shares/assets sean correctos tras el drenaje
+5. **Eventos para indexers**: `EmergencyExit(timestamp, total_rescued, strategies_drained)` y `IdleBufferSynced(old_buffer, new_buffer)` permiten monitoreo on-chain
+
+**¿Qué pasa si `emergencyExit()` revierte completamente?**
+- El vault queda pausado (paso 1 ya ejecutado)
+- Los fondos permanecen en las estrategias — ningún asset se pierde
+- Los usuarios pueden seguir retirando (withdraw/redeem no están pausados)
+- El owner diagnostica y reintenta
+
+**¿Qué pasa si Vault y Manager tienen owners distintos?**
+- Cada owner ejecuta su paso: owner del vault ejecuta `pause()` y `syncIdleBuffer()`, owner del manager ejecuta `emergencyExit()`
+- La comunicación off-chain entre owners es crítica en este escenario
+
+**Nota sobre dust/rounding:** Tras `emergencyExit()`, las estrategias pueden retener 1-2 wei de dust debido al rounding de conversiones (ej: wstETH/stETH). Esto es comportamiento esperado y no representa riesgo.
+
+**Funciones involucradas:**
+- `StrategyManager.emergencyExit()` — `onlyOwner`, drena estrategias
+- `Vault.syncIdleBuffer()` — `onlyOwner`, reconcilia accounting
+- `Vault.pause()` / `Vault.unpause()` — `onlyOwner`, emergency stop
+
+---
+
 ## 5. Puntos de Centralización
 
 El protocolo tiene puntos de centralización controlados por owners. En producción, estos deberían ser multisigs.
@@ -784,10 +839,11 @@ El protocolo tiene puntos de centralización controlados por owners. En producci
 
 **Puede:**
 
-1. **Pausar deposits/withdrawals/harvest**
+1. **Pausar deposits/harvest/allocateIdle**
 ```solidity
 vault.pause();
-// Todos los deposits, withdraws y harvest se bloquean
+// Bloquea: deposit, mint, harvest, allocateIdle
+// NO bloquea: withdraw, redeem (usuarios siempre pueden retirar)
 ```
 
 2. **Cambiar parámetros del protocolo**
@@ -807,6 +863,11 @@ vault.setTreasury(new_treasury);           // Cambia quién recibe fees
 vault.setFounder(new_founder);             // Cambia founder address
 vault.setStrategyManager(new_manager);     // Cambia strategy manager
 vault.setOfficialKeeper(keeper, true);     // Marca keepers oficiales
+```
+
+4. **Reconciliar accounting tras emergency exit**
+```solidity
+vault.syncIdleBuffer();                    // Reconcilia idle_buffer con balance real de WETH
 ```
 
 **NO puede:**
@@ -868,6 +929,12 @@ manager.removeStrategy(index);
 manager.setMaxAllocationPerStrategy(10000); // Permite 100% en una estrategia
 manager.setMinAllocationThreshold(0);       // Permite micro-allocations
 manager.setRebalanceThreshold(0);           // Permite rebalances sin diferencia APY
+```
+
+4. **Emergency exit (drenar todas las estrategias)**
+```solidity
+manager.emergencyExit();                    // Drena todas las estrategias al vault
+// Try-catch: si una estrategia falla, continúa con las demás
 ```
 
 **NO puede:**
@@ -1219,7 +1286,8 @@ Si este protocolo fuera a mainnet, auditoría debería enfocarse en:
 
 **Circuit breakers múltiples**
 - Max TVL (1000 ETH), min deposit, idle threshold por tier, max strategies
-- Pausa de emergencia
+- Pausa de emergencia (bloquea inflows, nunca outflows)
+- Emergency exit: drenaje completo de estrategias con fail-safe y reconciliación de accounting
 
 **Harvest fail-safe**
 - Try-catch individual por estrategia
@@ -1265,7 +1333,7 @@ Si este protocolo fuera a mainnet, auditoría debería enfocarse en:
 3. **Bug bounty** (Immunefi, Code4rena)
 4. **Multisig como owner** (mínimo 3/5)
 5. **Monitoring on-chain** (Forta, Tenderly)
-6. **Emergency playbook** documentado
+6. **Emergency playbook** documentado (ver sección 4.8 para la secuencia de emergency exit)
 7. **TVL gradual** (empezar con max_tvl = 100 ETH, subir gradualmente)
 
 **Para uso educacional:**

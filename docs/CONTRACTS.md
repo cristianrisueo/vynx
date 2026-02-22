@@ -28,7 +28,7 @@ Vault ERC4626 que actúa como interfaz principal para usuarios. Mintea shares to
 - `ERC4626` (OpenZeppelin): Implementación estándar de vault tokenizado
 - `ERC20` (OpenZeppelin): Token de shares (vxWETH, nombre dinámico: "VynX {SYMBOL} Vault")
 - `Ownable` (OpenZeppelin): Control de acceso administrativo
-- `Pausable` (OpenZeppelin): Emergency stop para deposits/withdrawals/harvest
+- `Pausable` (OpenZeppelin): Emergency stop para deposits/mint/harvest/allocateIdle (retiros siempre habilitados)
 
 ### Llamado Por
 
@@ -129,7 +129,7 @@ Retira cantidad exacta de WETH quemando shares necesarias.
 7. Verifica rounding tolerance: `assets - to_transfer < 20 wei`
 8. Transfiere `assets` netos al `receiver`
 
-**Modificadores**: `whenNotPaused`
+**Modificadores**: Ninguno (siempre habilitado, incluso cuando el vault está pausado)
 
 **Eventos**: `Withdrawn(receiver, assets, shares)`
 
@@ -145,7 +145,7 @@ Quema shares exactas y retira WETH proporcional.
 1. Calcula assets netos usando `previewRedeem(shares)`
 2. Similar a `withdraw()` a partir de aquí
 
-**Modificadores**: `whenNotPaused`
+**Modificadores**: Ninguno (siempre habilitado, incluso cuando el vault está pausado)
 
 **Eventos**: `Withdrawn(receiver, assets, shares)`
 
@@ -302,6 +302,35 @@ function setStrategyManager(address new_manager) external onlyOwner // No addres
 function setOfficialKeeper(address keeper, bool status) external onlyOwner
 function setMinProfitForHarvest(uint256 new_min) external onlyOwner
 function setKeeperIncentive(uint256 new_incentive) external onlyOwner
+
+// Emergency exit support
+function syncIdleBuffer() external onlyOwner  // Reconcilia idle_buffer con balance real de WETH
+    // Usar después de manager.emergencyExit() para corregir accounting
+```
+
+---
+
+#### syncIdleBuffer()
+
+Reconcilia `idle_buffer` con el balance real de WETH del contrato.
+
+**Cuándo usar:** Después de ejecutar `manager.emergencyExit()`, que transfiere WETH directamente al vault sin pasar por `deposit()`, dejando `idle_buffer` desincronizado.
+
+**Flujo:**
+1. Guarda valor anterior: `old_buffer = idle_buffer`
+2. Lee balance real: `real_balance = IERC20(asset()).balanceOf(address(this))`
+3. Actualiza: `idle_buffer = real_balance`
+4. Emite `IdleBufferSynced(old_buffer, real_balance)`
+
+**Modificadores**: `onlyOwner`
+
+**Eventos**: `IdleBufferSynced(old_buffer, new_buffer)`
+
+**Secuencia completa de emergencia:**
+```solidity
+vault.pause();             // 1. Bloquea nuevos depósitos
+manager.emergencyExit();   // 2. Drena estrategias al vault
+vault.syncIdleBuffer();    // 3. Reconcilia accounting
 ```
 
 ### Eventos Importantes
@@ -323,6 +352,7 @@ event FounderUpdated(address indexed old_founder, address indexed new_founder);
 event OfficialKeeperUpdated(address indexed keeper, bool status);
 event MinProfitForHarvestUpdated(uint256 old_min, uint256 new_min);
 event KeeperIncentiveUpdated(uint256 old_incentive, uint256 new_incentive);
+event IdleBufferSynced(uint256 old_buffer, uint256 new_buffer);
 ```
 
 ### Errores Custom
@@ -574,6 +604,40 @@ Remueve estrategia del manager por índice.
 
 ---
 
+#### emergencyExit()
+
+Drena todas las estrategias activas y transfiere los assets al vault en caso de emergencia.
+
+**Precondición**: Solo callable por el owner del manager. Sin timelock.
+
+**Flujo:**
+1. Inicializa acumuladores: `total_rescued = 0`, `strategies_drained = 0`
+2. Para cada estrategia activa:
+   - Obtiene `strategy_balance = strategy.totalAssets()`
+   - Si `strategy_balance == 0`, omite (continue)
+   - `try strategy.withdraw(strategy_balance)`:
+     - Si éxito: `total_rescued += actual_withdrawn`, `strategies_drained++`
+     - Si falla: emite `HarvestFailed(strategy, reason)` y continúa
+3. Si `total_rescued > 0`: transfiere todo el WETH rescatado al vault en una sola transferencia
+4. Emite `EmergencyExit(block.timestamp, total_rescued, strategies_drained)`
+
+**Modificadores**: `onlyOwner`
+
+**Eventos**: `EmergencyExit(timestamp, total_rescued, strategies_drained)`, `HarvestFailed(strategy, reason)` si alguna estrategia falla
+
+**Nota sobre fail-safe:** Usa el mismo patrón try-catch que `harvest()` — si una estrategia está bugueada o congelada, las demás se drenan correctamente. La estrategia problemática se gestiona manualmente por separado.
+
+**Nota sobre dust:** Tras el drenaje, las estrategias pueden retener 1-2 wei de dust por rounding en conversiones (ej: wstETH/stETH). Esto es esperado y no representa pérdida de fondos.
+
+**Secuencia obligatoria post-exit:**
+```solidity
+vault.pause();             // 1. Detiene nuevos depósitos
+manager.emergencyExit();   // 2. Drena estrategias
+vault.syncIdleBuffer();    // 3. Reconcilia idle_buffer con balance real
+```
+
+---
+
 ### Funciones Internas
 
 #### _computeTargets() → uint256[]
@@ -667,6 +731,7 @@ event StrategyRemoved(address indexed strategy);
 event TargetAllocationUpdated();
 event HarvestFailed(address indexed strategy, string reason);
 event Initialized(address indexed vault);
+event EmergencyExit(uint256 timestamp, uint256 total_rescued, uint256 strategies_drained);
 ```
 
 ### Modificadores

@@ -402,7 +402,9 @@ El protocolo utiliza un modelo de ownership jerárquico para control granular:
 ```
 Owner del Vault (EOA)
     |
-    +--> Vault.pause()                          # Emergency stop
+    +--> Vault.pause()                          # Emergency stop (bloquea inflows, no outflows)
+    +--> Vault.unpause()                        # Reanuda operaciones normales
+    +--> Vault.syncIdleBuffer()                 # Reconcilia idle_buffer tras emergencyExit
     +--> Vault.setPerformanceFee()              # Ajustar performance fee
     +--> Vault.setFeeSplit()                    # Ajustar split treasury/founder
     +--> Vault.setMinDeposit()                  # Ajustar depósito mínimo
@@ -417,6 +419,7 @@ Owner del Vault (EOA)
 
 Owner del Manager (EOA)
     |
+    +--> StrategyManager.emergencyExit()        # Drena TODAS las estrategias al vault
     +--> StrategyManager.addStrategy()          # Agregar nuevas estrategias
     +--> StrategyManager.removeStrategy()       # Remover estrategias
     +--> StrategyManager.setMaxAllocation()     # Ajustar caps
@@ -519,6 +522,40 @@ Keeper / Bot / Usuario
             └─> IERC20(weth).transfer(manager → strategy, amount)
             └─> strategy.deposit(amount)
 ```
+
+## Flujo de Emergency Exit
+
+Cuando se detecta un exploit activo o bug crítico, el protocolo permite drenar todas las estrategias y devolver los fondos al vault.
+
+```
+Owner del Vault                    Owner del Manager
+    |                                    |
+    | 1. vault.pause()                   |
+    |    Bloquea: deposit, mint,         |
+    |    harvest, allocateIdle           |
+    |    NO bloquea: withdraw, redeem    |
+    |                                    |
+    |                                    | 2. manager.emergencyExit()
+    |                                    |    Para cada estrategia:
+    |                                    |      try strategy.withdraw(all)
+    |                                    |        → acumula rescued
+    |                                    |      catch → emit HarvestFailed
+    |                                    |    Transfiere total_rescued → vault
+    |                                    |    emit EmergencyExit(...)
+    |                                    |
+    | 3. vault.syncIdleBuffer()          |
+    |    idle_buffer = WETH.balanceOf(vault)
+    |    emit IdleBufferSynced(old, new) |
+    |                                    |
+    v                                    v
+    Vault pausado, fondos en idle,
+    usuarios pueden retirar via
+    withdraw() / redeem()
+```
+
+**Diseño sin script de deployment:** Las 3 transacciones son independientes y no atómicas. Si Vault y Manager tienen owners distintos, cada uno ejecuta su paso. Un script Foundry no aporta atomicidad ni puede firmar por dos EOAs distintos, por lo que la secuencia se ejecuta manualmente (cast, Etherscan, o multisig UI).
+
+---
 
 ## Decisiones Arquitectónicas Clave
 

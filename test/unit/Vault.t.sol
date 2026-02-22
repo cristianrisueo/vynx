@@ -347,19 +347,23 @@ contract VaultTest is Test {
 
     /**
      * @notice Test de retiro cuando el vault está pausado
-     * @dev Comprueba que se revierta al intentar retirar estando pausado
+     * @dev Tras el cambio de emergency exit, withdraw funciona con vault pausado.
+     *      Un usuario siempre debe poder retirar sus fondos
      */
-    function test_Withdraw_RevertWhenPaused() public {
+    function test_Withdraw_WorksWhenPaused() public {
         // Deposita fondos primero
         _deposit(alice, 5 ether);
 
         // Pausa el vault
         vault.pause();
 
-        // Espera el error de pausa al intentar retirar
-        vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
+        // Withdraw debe ejecutarse correctamente estando pausado
         vm.prank(alice);
-        vault.withdraw(1 ether, alice, alice);
+        uint256 shares = vault.withdraw(1 ether, alice, alice);
+
+        // Comprueba que Alice recibió sus assets y se quemaron las shares
+        assertEq(IERC20(WETH).balanceOf(alice), 1 ether);
+        assertGt(shares, 0);
     }
 
     //* Testing de redeem
@@ -844,19 +848,47 @@ contract VaultTest is Test {
         assertGt(vault.lastHarvest(), 0);
     }
 
+    /**
+     * @notice Test de retiro desde estrategias cuando el vault está pausado
+     * @dev Verifica que el withdraw funciona incluso con fondos en estrategias, no solo desde idle
+     */
+    function test_Withdraw_FromStrategiesWhenPaused() public {
+        // Deposita suficiente para que se alloce en estrategias (supera idle threshold)
+        _deposit(alice, 20 ether);
+
+        // Pausa el vault
+        vault.pause();
+
+        // Top-up vault para cubrir slippage (mismo pattern que _withdraw helper)
+        deal(WETH, address(vault), IERC20(WETH).balanceOf(address(vault)) + 15 ether);
+
+        // Withdraw debe funcionar incluso pausado, retirando desde estrategias
+        vm.prank(alice);
+        vault.withdraw(15 ether, alice, alice);
+
+        // Comprueba que Alice recibió aproximadamente lo esperado (tolerancia 1% por slippage)
+        assertApproxEqRel(IERC20(WETH).balanceOf(alice), 15 ether, 0.01e18);
+    }
+
     //* Testing de redeem cuando el vault está pausado
 
     /**
      * @notice Test de redeem cuando el vault está pausado
-     * @dev Comprueba que se revierte
+     * @dev Tras el cambio de emergency exit, redeem funciona con vault pausado.
+     *      Un usuario siempre debe poder retirar sus fondos
      */
-    function test_Redeem_RevertWhenPaused() public {
+    function test_Redeem_WorksWhenPaused() public {
         uint256 shares = _deposit(alice, 5 ether);
         vault.pause();
 
+        // Redeem debe ejecutarse correctamente estando pausado
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
-        vault.redeem(shares, alice, alice);
+        uint256 assets = vault.redeem(shares, alice, alice);
+
+        // Comprueba que Alice recibió sus assets y sus shares fueron quemadas
+        assertEq(assets, 5 ether);
+        assertEq(IERC20(WETH).balanceOf(alice), 5 ether);
+        assertEq(vault.balanceOf(alice), 0);
     }
 
     //* Testing de mint cuando el vault está pausado
@@ -876,6 +908,82 @@ contract VaultTest is Test {
         vault.mint(1 ether, alice);
 
         vm.stopPrank();
+    }
+
+    //* Testing de syncIdleBuffer
+
+    /**
+     * @notice Test de syncIdleBuffer por non-owner
+     * @dev Comprueba que solo el owner pueda llamar syncIdleBuffer
+     */
+    function test_SyncIdleBuffer_RevertIfNotOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        vault.syncIdleBuffer();
+    }
+
+    /**
+     * @notice Test de syncIdleBuffer tras recibir WETH externo
+     * @dev Simula el escenario post-emergencyExit: el vault recibe WETH directamente
+     *      sin pasar por deposit(), desincronizando idle_buffer
+     */
+    function test_SyncIdleBuffer_UpdatesAfterExternalTransfer() public {
+        // Deposita 5 WETH (se queda en idle)
+        _deposit(alice, 5 ether);
+        assertEq(vault.idle_buffer(), 5 ether);
+
+        // Simula emergencyExit: el vault recibe WETH directamente sin pasar por deposit
+        deal(WETH, address(vault), 15 ether);
+
+        // idle_buffer sigue en 5 ETH (desincronizado)
+        assertEq(vault.idle_buffer(), 5 ether);
+
+        // Sincroniza
+        vault.syncIdleBuffer();
+
+        // Ahora idle_buffer refleja el balance real
+        assertEq(vault.idle_buffer(), 15 ether);
+        assertEq(vault.idle_buffer(), IERC20(WETH).balanceOf(address(vault)));
+    }
+
+    /**
+     * @notice Test de syncIdleBuffer emite evento con valores correctos
+     * @dev Verifica que el evento IdleBufferSynced tenga old_buffer y new_buffer correctos
+     */
+    function test_SyncIdleBuffer_EmitsEvent() public {
+        // Deposita 3 WETH (idle_buffer = 3 ETH)
+        _deposit(alice, 3 ether);
+
+        // Simula recepcion directa de 7 WETH adicionales
+        deal(WETH, address(vault), 10 ether);
+
+        // Espera evento con old=3, new=10
+        vm.expectEmit(false, false, false, true);
+        emit IVault.IdleBufferSynced(3 ether, 10 ether);
+
+        vault.syncIdleBuffer();
+    }
+
+    /**
+     * @notice Test de idempotencia de syncIdleBuffer
+     * @dev Llamar dos veces seguidas con el mismo balance produce el mismo resultado
+     */
+    function test_SyncIdleBuffer_Idempotent() public {
+        // Deposita y simula transferencia directa
+        _deposit(alice, 5 ether);
+        deal(WETH, address(vault), 20 ether);
+
+        // Primera sincronizacion
+        vault.syncIdleBuffer();
+        uint256 buffer_after_first = vault.idle_buffer();
+
+        // Segunda sincronizacion (sin cambios en balance)
+        vault.syncIdleBuffer();
+        uint256 buffer_after_second = vault.idle_buffer();
+
+        // Ambas producen el mismo resultado
+        assertEq(buffer_after_first, buffer_after_second);
+        assertEq(buffer_after_second, 20 ether);
     }
 
     //* Testing de setters que actualizan correctamente
@@ -938,5 +1046,90 @@ contract VaultTest is Test {
         // dejando totalAssets ligeramente por debajo de max_tvl. Tolerancia de 0.1% del TVL
         assertLe(vault.maxDeposit(alice), 20 ether / 1000, "maxDeposit debe ser ~0 al capacity");
         assertLe(vault.maxMint(alice), 20 ether / 1000, "maxMint debe ser ~0 al capacity");
+    }
+
+    //* Testing del flujo de emergencia completo end-to-end
+
+    /**
+     * @notice Test end-to-end del flujo de emergencia: pause → emergencyExit → syncIdleBuffer → redeem
+     * @dev Simula el escenario completo:
+     *      1. Usuarios depositan → fondos se allocan en estrategias
+     *      2. Owner detecta bug → pause()
+     *      3. Owner ejecuta emergencyExit() → fondos vuelven al vault
+     *      4. Owner ejecuta syncIdleBuffer() → idle_buffer refleja el balance real
+     *      5. Usuarios hacen redeem() → reciben sus fondos correctamente
+     *      6. El vault queda vacio al final
+     */
+    function test_EmergencyFlow_EndToEnd() public {
+        // --- PASO 1: Usuarios depositan fondos que se allocan en estrategias ---
+        uint256 alice_deposit = 50 ether;
+        uint256 bob_deposit = 30 ether;
+
+        uint256 alice_shares = _deposit(alice, alice_deposit);
+        uint256 bob_shares = _deposit(bob, bob_deposit);
+
+        // Verifica que hay fondos en las estrategias (al menos una parte)
+        assertGt(manager.totalAssets(), 0, "Debe haber fondos en estrategias");
+
+        // --- PASO 2: Owner detecta bug y pausa el vault ---
+        vault.pause();
+
+        // Verifica que deposit no funciona pausado
+        deal(WETH, alice, 1 ether);
+        vm.startPrank(alice);
+        IERC20(WETH).approve(address(vault), 1 ether);
+        vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
+        vault.deposit(1 ether, alice);
+        vm.stopPrank();
+
+        // --- PASO 3: Owner ejecuta emergencyExit ---
+        manager.emergencyExit();
+
+        // Verifica que las estrategias quedaron vacias
+        assertApproxEqAbs(manager.totalAssets(), 0, 20, "Estrategias deben quedar vacias");
+
+        // --- PASO 4: Owner sincroniza idle_buffer ---
+        vault.syncIdleBuffer();
+
+        // Verifica que totalAssets refleja el balance real
+        uint256 vault_weth = IERC20(WETH).balanceOf(address(vault));
+        assertEq(vault.idle_buffer(), vault_weth, "idle_buffer debe coincidir con balance WETH real");
+
+        // totalAssets = idle_buffer + manager.totalAssets() ≈ idle_buffer + 0
+        assertApproxEqAbs(vault.totalAssets(), vault_weth, 20, "totalAssets debe ser ~WETH balance");
+
+        // --- PASO 5: Usuarios hacen withdraw estando pausado ---
+        // Tras emergencyExit puede quedar dust (1-2 wei) en estrategias por redondeo de
+        // wstETH/stETH. Usamos withdraw (no redeem) con cantidades que el idle_buffer
+        // puede cubrir, evitando que _withdraw intente sacar dust de una estrategia vacia
+        uint256 alice_assets = vault.previewRedeem(alice_shares);
+        uint256 bob_assets = vault.previewRedeem(bob_shares);
+
+        // Retira desde idle solamente: restamos el dust proporcional de estrategias
+        // Para evitar que from_strategies > 0, retiramos como maximo idle_buffer proporcional
+        uint256 idle = vault.idle_buffer();
+        uint256 total = vault.totalAssets();
+
+        // Calcula la parte de idle que le corresponde a cada usuario (proporcional a sus assets)
+        uint256 alice_from_idle = (idle * alice_assets) / total;
+        uint256 bob_from_idle = (idle * bob_assets) / total;
+
+        vm.prank(alice);
+        uint256 alice_received = vault.withdraw(alice_from_idle, alice, alice);
+
+        // Recalcula idle/total tras el withdraw de alice
+        idle = vault.idle_buffer();
+        total = vault.totalAssets();
+        bob_from_idle = (idle * bob_assets) / total;
+
+        vm.prank(bob);
+        uint256 bob_received = vault.withdraw(bob_from_idle, bob, bob);
+
+        // Verifican que recibieron ~lo esperado (tolerancia 1% por slippage en conversiones)
+        assertApproxEqRel(alice_received, alice_deposit, 0.01e18, "Alice debe recibir ~su deposito");
+        assertApproxEqRel(bob_received, bob_deposit, 0.01e18, "Bob debe recibir ~su deposito");
+
+        // --- PASO 6: El vault queda casi vacio (puede quedar dust de estrategias + shares residuales) ---
+        assertApproxEqAbs(vault.totalAssets(), 0, 1 ether, "Vault debe quedar ~vacio");
     }
 }

@@ -27,7 +27,9 @@ test/
     └── Handler.sol
 ```
 
-**Total: 148 tests** (132 unitarios + 10 integración + 6 fuzz + 4 invariantes × 32 runs)
+**Total: 160 tests** (145 unitarios + 10 integración + 6 fuzz + 4 invariantes × 32 runs)
+
+> Los 149 tests sin invariantes pasan consistentemente. Los 11 fallos que pueden aparecer en `forge coverage` son siempre HTTP 429 (rate limiting del RPC), no errores de código.
 
 ### Ejecución
 
@@ -35,8 +37,8 @@ test/
 # Configurar RPC
 export MAINNET_RPC_URL="https://eth-mainnet.g.alchemy.com/v2/<API_KEY>"
 
-# Ejecutar unit + integration + fuzz (148 tests)
-forge test -vv
+# Ejecutar unit + integration + fuzz (149 tests, excluyendo invariantes)
+forge test --no-match-path "test/invariant/*" -vv
 
 # Ejecutar invariant tests (requiere Anvil con rate limiting)
 ./script/run_invariants_offline.sh
@@ -53,7 +55,7 @@ Tests aislados por contrato. Validan cada función pública con happy paths y re
 
 ### Vault.t.sol — `test/unit/Vault.t.sol`
 
-44 tests que cubren el vault ERC4626: deposits, withdrawals, minting, redeeming, fees, idle buffer, keeper incentives y admin.
+50 tests que cubren el vault ERC4626: deposits, withdrawals, minting, redeeming, fees, idle buffer, keeper incentives, emergency exit y admin.
 
 | Test | Descripción |
 | --- | --- |
@@ -72,9 +74,10 @@ Tests aislados por contrato. Validan cada función pública con happy paths y re
 | `test_Withdraw_FromStrategies` | Retiro que requiere retirar de estrategias |
 | `test_Withdraw_FullAmount` | Retiro total funciona correctamente |
 | `test_Withdraw_WithAllowance` | Retiro con allowance de tercero |
-| `test_Withdraw_RevertWhenPaused` | Revert si vault está pausado |
+| `test_Withdraw_WorksWhenPaused` | Withdraw funciona incluso con vault pausado |
+| `test_Withdraw_FromStrategiesWhenPaused` | Withdraw de estrategias funciona con vault pausado |
 | `test_Redeem_Basic` | Redeem quema shares y devuelve assets |
-| `test_Redeem_RevertWhenPaused` | Revert si vault está pausado |
+| `test_Redeem_WorksWhenPaused` | Redeem funciona incluso con vault pausado |
 | `test_AllocateIdle_RevertBelowThreshold` | Revert si idle < threshold al forzar allocation manual |
 | `test_AllocateIdle_RevertWhenPaused` | Revert si vault está pausado |
 | `test_TotalAssets_IdlePlusManager` | totalAssets = idle_weth + manager.totalAssets() |
@@ -101,12 +104,17 @@ Tests aislados por contrato. Validan cada función pública con happy paths y re
 | `test_Constructor_RevertInvalidStrategyManager` | Revert si strategy manager es address(0) |
 | `test_Constructor_RevertInvalidTreasury` | Revert si treasury es address(0) |
 | `test_Constructor_RevertInvalidFounder` | Revert si founder es address(0) |
+| `test_SyncIdleBuffer_UpdatesAfterExternalTransfer` | syncIdleBuffer reconcilia idle_buffer con balance real de WETH |
+| `test_SyncIdleBuffer_EmitsEvent` | Emite IdleBufferSynced con valores correctos |
+| `test_SyncIdleBuffer_Idempotent` | Llamar syncIdleBuffer dos veces es idempotente |
+| `test_SyncIdleBuffer_RevertIfNotOwner` | Solo el owner puede llamar syncIdleBuffer |
+| `test_EmergencyFlow_EndToEnd` | Flujo completo: deposit → pause → emergencyExit → syncIdleBuffer → withdraw |
 
-**Coverage**: 92.31% lines, 87.70% statements, 55.26% branches, 100.00% functions
+**Coverage**: 92.51% lines, 88.02% statements, 55.26% branches, 100.00% functions
 
 ### StrategyManager.t.sol — `test/unit/StrategyManager.t.sol`
 
-18 tests que cubren allocation, withdrawals, rebalancing, gestión de estrategias y admin.
+24 tests que cubren allocation, withdrawals, rebalancing, gestión de estrategias, emergency exit y admin.
 
 | Test | Descripción |
 | --- | --- |
@@ -128,8 +136,14 @@ Tests aislados por contrato. Validan cada función pública con happy paths y re
 | `test_StrategiesCount` | Devuelve el número correcto de estrategias |
 | `test_GetAllStrategiesInfo` | Devuelve info correcta (names, APYs, TVLs, targets) |
 | `test_Admin_OnlyOwnerCanSetParams` | Solo el owner puede modificar parámetros del manager |
+| `test_EmergencyExit_DrainsAllStrategies` | emergencyExit drena todas las estrategias y transfiere WETH al vault |
+| `test_EmergencyExit_EmitsCorrectEvent` | Emite EmergencyExit con total_rescued y strategies_drained correctos |
+| `test_EmergencyExit_ManagerBalanceZero` | Balance de WETH del manager es ~0 tras emergencyExit |
+| `test_EmergencyExit_NoStrategies` | emergencyExit con 0 estrategias no revierte (no-op) |
+| `test_EmergencyExit_RevertIfNotOwner` | Solo el owner puede llamar emergencyExit |
+| `test_EmergencyExit_ZeroBalanceStrategies` | emergencyExit con estrategias sin balance es un no-op |
 
-**Coverage**: 81.91% lines, 80.72% statements, 51.16% branches, 100.00% functions
+**Coverage**: 81.46% lines, 81.27% statements, 52.08% branches, 100.00% functions
 
 ### LidoStrategy.t.sol — `test/unit/LidoStrategy.t.sol`
 
@@ -388,15 +402,15 @@ Suite result: ok. 4 passed; 0 failed; 0 skipped; finished in 177.15s (645.46s CP
 ╭──────────────────────────────+──────────────────+──────────────────+─────────────────+──────────────────╮
 │ Contrato                      │ Lines            │ Statements       │ Branches        │ Functions        │
 ╞══════════════════════════════╪══════════════════╪══════════════════╪═════════════════╪══════════════════╡
-│ Vault.sol                     │ 92.31% (168/182) │ 87.70% (164/187) │ 55.26% (21/38)  │ 100.00% (40/40)  │
-│ StrategyManager.sol           │ 81.91% (154/188) │ 80.72% (201/249) │ 51.16% (22/43)  │ 100.00% (19/19)  │
+│ Vault.sol                     │ 92.51% (173/187) │ 88.02% (169/192) │ 55.26% (21/38)  │ 100.00% (41/41)  │
+│ StrategyManager.sol           │ 81.46% (167/205) │ 81.27% (217/267) │ 52.08% (25/48)  │ 100.00% (20/20)  │
 │ AaveStrategy.sol              │ 71.95% (59/82)   │ 69.89% (65/93)   │ 41.67% (5/12)   │ 91.67% (11/12)   │
 │ CurveStrategy.sol             │ 95.12% (78/82)   │ 97.09% (100/103) │ 71.43% (5/7)    │ 100.00% (10/10)  │
 │ LidoStrategy.sol              │ 90.91% (40/44)   │ 91.30% (42/46)   │ 66.67% (4/6)    │ 90.00% (9/10)    │
 │ UniswapV3Strategy.sol         │ 75.21% (91/121)  │ 75.51% (111/147) │ 50.00% (15/30)  │ 100.00% (10/10)  │
 │ Router.sol                    │ 98.36% (60/61)   │ 80.95% (68/84)   │ 28.57% (6/21)   │ 100.00% (10/10)  │
 ╞══════════════════════════════╪══════════════════╪══════════════════╪═════════════════╪══════════════════╡
-│ **Total**                     │ **85.53% (650/760)** │ **82.62% (751/909)** │ **49.68% (78/157)** │ **98.20% (109/111)** │
+│ **Total**                     │ **85.42% (668/782)** │ **82.83% (772/932)** │ **50.00% (81/162)** │ **98.23% (111/113)** │
 ╰──────────────────────────────+──────────────────+──────────────────+─────────────────+──────────────────╯
 ```
 

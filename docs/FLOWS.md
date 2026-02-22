@@ -218,6 +218,8 @@ NO auto-allocate (5 < 8)
 
 El usuario retira WETH del vault quemando shares. Si hay suficiente WETH en el idle buffer, se retira de ahí (gas-efficient). Si no, el vault solicita fondos al manager, que retira proporcionalmente de todas las estrategias. El vault tolera hasta 20 wei de rounding por redondeo de protocolos externos.
 
+> **Nota de seguridad**: `withdraw()` y `redeem()` funcionan **siempre**, incluso cuando el vault está pausado. En DeFi, la pausa bloquea entradas (deposit, mint) pero nunca las salidas: un usuario debe poder recuperar sus fondos independientemente del estado del vault.
+
 ### Flujo Paso a Paso
 
 ```
@@ -1242,6 +1244,187 @@ Router balance: 0 WETH, 0 DAI (stateless)
 
 ---
 
+## 7. Flujo de Emergency Exit
+
+### Descripción General
+
+Emergency Exit es el mecanismo de último recurso para drenar todas las estrategias cuando se detecta un bug crítico o exploit activo. Transfiere todos los assets al vault para que los usuarios puedan retirar. La secuencia son 3 transacciones independientes (no atómicas) ejecutadas por los owners del vault y del manager.
+
+> **Importante**: Si Vault y Manager tienen owners distintos, cada owner ejecuta su paso. Si `emergencyExit()` revierte, el vault queda pausado pero los fondos permanecen seguros en las estrategias — ningún asset se pierde.
+
+### Flujo Paso a Paso
+
+```
+┌──────────────┐          ┌──────────┐          ┌────────────┐          ┌──────────┐
+│ Owner(s)     │          │  Vault   │          │  Manager   │          │ Strategy │
+└──────┬───────┘          └────┬─────┘          └─────┬──────┘          └────┬─────┘
+       │                       │                      │                       │
+       │ 1. vault.pause()      │                      │                       │
+       ├──────────────────────>│                      │                       │
+       │                       │ Bloquea deposit,     │                       │
+       │                       │ mint, harvest,       │                       │
+       │                       │ allocateIdle         │                       │
+       │                       │                      │                       │
+       │                       │ withdraw/redeem      │                       │
+       │                       │ siguen habilitados   │                       │
+       │                       │                      │                       │
+       │ 2. manager.emergencyExit()                   │                       │
+       ├─────────────────────────────────────────────>│                       │
+       │                       │                      │                       │
+       │                       │                      │ 3. for each strategy: │
+       │                       │                      │    balance = totalAssets()
+       │                       │                      │    if balance == 0:   │
+       │                       │                      │      skip             │
+       │                       │                      │                       │
+       │                       │                      │ 4. try withdraw(bal)  │
+       │                       │                      ├──────────────────────>│
+       │                       │                      │                       │
+       │                       │                      │ 5. actual_withdrawn   │
+       │                       │                      │<──────────────────────┤
+       │                       │                      │                       │
+       │                       │                      │ (si falla: emit       │
+       │                       │                      │  HarvestFailed,       │
+       │                       │                      │  continua con la      │
+       │                       │                      │  siguiente estrategia)│
+       │                       │                      │                       │
+       │                       │ 6. safeTransfer(     │                       │
+       │                       │    vault, total)     │                       │
+       │                       │<─────────────────────┤                       │
+       │                       │                      │                       │
+       │                       │                      │ 7. emit EmergencyExit │
+       │                       │                      │    (timestamp, total, │
+       │                       │                      │     strategies_drained)│
+       │                       │                      │                       │
+       │ 8. vault.syncIdleBuffer()                    │                       │
+       ├──────────────────────>│                      │                       │
+       │                       │ 9. idle_buffer =     │                       │
+       │                       │    WETH.balanceOf(    │                       │
+       │                       │      address(this))  │                       │
+       │                       │                      │                       │
+       │                       │ 10. emit             │                       │
+       │                       │   IdleBufferSynced   │                       │
+       │                       │   (old, new)         │                       │
+       │                       │                      │                       │
+```
+
+### Detalle de Pasos
+
+**Paso 1: Pausar el Vault**
+```solidity
+// Owner del Vault ejecuta:
+vault.pause();
+
+// Efecto: bloquea deposit(), mint(), harvest(), allocateIdle()
+// withdraw() y redeem() siguen funcionando (usuarios pueden salir)
+```
+
+**Paso 2: Drenar Estrategias**
+```solidity
+// Owner del Manager ejecuta:
+manager.emergencyExit();
+
+// Itera todas las estrategias con try-catch (fail-safe)
+// Si una estrategia falla, emite HarvestFailed y continúa con las demás
+// Transfiere todo el WETH rescatado al vault en una sola transferencia
+```
+
+**Paso 3: Reconciliar Accounting**
+```solidity
+// Owner del Vault ejecuta:
+vault.syncIdleBuffer();
+
+// idle_buffer = IERC20(asset()).balanceOf(address(this))
+// Necesario porque emergencyExit() transfiere WETH directamente al vault
+// sin pasar por deposit() ni _allocateIdle(), desincronizando idle_buffer
+```
+
+### Ejemplo Numérico Completo
+
+**Escenario**: Se detecta un bug en CurveStrategy. El owner ejecuta la secuencia de emergencia para rescatar todos los fondos del Balanced tier.
+
+**Estado inicial:**
+```
+idle_buffer = 3 ETH
+LidoStrategy:  30 ETH en wstETH
+AaveStrategy:  35 ETH en aWstETH
+CurveStrategy: 32 ETH en gauge LP (estrategia con bug)
+totalAssets = 3 + 30 + 35 + 32 = 100 ETH
+```
+
+**1. vault.pause()**
+```
+Estado: vault pausado
+- deposit() → revierte
+- mint() → revierte
+- harvest() → revierte
+- allocateIdle() → revierte
+- withdraw() → funciona ✓
+- redeem() → funciona ✓
+```
+
+**2. manager.emergencyExit()**
+```
+Itera estrategias:
+
+LidoStrategy (30 ETH):
+  try withdraw(30 ETH):
+    wstETH → unwrap → stETH → swap → WETH
+    actual_withdrawn = 29.999999999999999998 ETH (2 wei dust por conversión wstETH/stETH)
+  ✓ éxito
+
+AaveStrategy (35 ETH):
+  try withdraw(35 ETH):
+    aWstETH → Aave withdraw → wstETH → swap → WETH
+    actual_withdrawn = 34.999999999999999999 ETH (1 wei dust)
+  ✓ éxito
+
+CurveStrategy (32 ETH):
+  try withdraw(32 ETH):
+    gauge unstake → remove_liquidity → ¡BUG! → revierte
+  ✗ catch → emit HarvestFailed(curveStrategy, "bug error message")
+  Continúa con las demás estrategias
+
+total_rescued = 29.999...998 + 34.999...999 = 64.999...997 ETH
+strategies_drained = 2
+
+safeTransfer(vault, 64.999...997 ETH)
+emit EmergencyExit(block.timestamp, 64.999...997, 2)
+```
+
+**3. vault.syncIdleBuffer()**
+```
+old_buffer = 3 ETH (valor anterior, desactualizado)
+real_balance = WETH.balanceOf(vault) = 3 + 64.999...997 = 67.999...997 ETH
+idle_buffer = 67.999...997 ETH (sincronizado con balance real)
+
+emit IdleBufferSynced(3 ETH, 67.999...997 ETH)
+```
+
+**Estado final:**
+```
+idle_buffer = 67.999...997 ETH (sincronizado)
+LidoStrategy:  ~0 ETH (drenada, posible 1-2 wei dust)
+AaveStrategy:  ~0 ETH (drenada, posible 1 wei dust)
+CurveStrategy: 32 ETH (no se pudo drenar — requiere acción manual)
+totalAssets = 67.999...997 + 0 + 0 + 32 = 99.999...997 ETH
+
+Usuarios pueden hacer withdraw() / redeem() para recuperar fondos del idle_buffer.
+El owner debe gestionar CurveStrategy por separado (removeStrategy, parche, etc.).
+```
+
+### Edge Cases
+
+| Caso | Comportamiento |
+|------|---------------|
+| Todas las estrategias con balance 0 | `emergencyExit()` completa sin error, `total_rescued = 0` |
+| Una estrategia revierte | try-catch captura el error, emite `HarvestFailed`, continúa con las demás |
+| Todas las estrategias revierten | `total_rescued = 0`, no se transfiere nada, pero el evento `EmergencyExit` se emite igualmente |
+| Dust residual (1-2 wei) | Normal en conversiones wstETH/stETH. No afecta la operación |
+| `syncIdleBuffer` sin `emergencyExit` previo | Funciona correctamente — simplemente sincroniza `idle_buffer` con el balance real |
+| Owner del Vault ≠ Owner del Manager | Cada owner ejecuta su paso. No requiere coordinación atómica |
+
+---
+
 ## Resumen de Flujos
 
 | Flujo | Trigger | Auto/Manual | Gas Optimization | Fee |
@@ -1253,6 +1436,7 @@ Router balance: 0 WETH, 0 DAI (stateless)
 | **Idle Allocate** | idle >= threshold | Auto en deposit, o manual | Amortiza gas entre usuarios | Ninguna |
 | **Router Deposit** | Usuario con ERC20/ETH | Manual (usuario llama) | Swap + deposit en 1 tx | Slippage Uniswap (0.05-1%) |
 | **Router Withdraw** | Usuario quiere ERC20/ETH | Manual (usuario llama) | Redeem + swap en 1 tx | Slippage Uniswap (0.05-1%) |
+| **Emergency Exit** | Bug crítico / exploit | Manual (owner, 3 txs) | try-catch fail-safe por estrategia | Ninguna |
 
 ### Referencia rápida de parámetros por tier
 

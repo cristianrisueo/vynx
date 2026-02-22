@@ -24,7 +24,8 @@ En v2, el protocolo incorpora un **Router periferico** que actua como punto de e
 - **Keeper System**: Keepers oficiales (sin incentivo) y externos (con incentivo en WETH)
 - **Limites de Allocation**: Configurables por tier (max 50-70%, min 10-20% por estrategia)
 - **Circuit Breakers**: TVL maximo, deposito minimo
-- **Pausable**: Emergency stop en caso de vulnerabilidades
+- **Pausable**: Emergency stop (bloquea inflows, retiros siempre habilitados)
+- **Emergency Exit**: Drenaje completo de estrategias con fail-safe y reconciliacion de accounting
 - **Integracion con Protocolos Battle-Tested**: Lido, Aave v3, Curve, Uniswap V3
 - **Router Multi-Token**: Depositos y retiros con ETH, USDC, DAI, WBTC o cualquier token con pool Uniswap V3/WETH
 - **Zap Deposit/Withdraw**: Swap + deposit o redeem + swap en una sola transaccion via Router
@@ -137,13 +138,13 @@ vynx/
 
 ## Testing
 
-148 tests ejecutados contra fork de Ethereum Mainnet real (sin mocks). Los tests cubren flujos unitarios, integracion end-to-end, fuzz testing stateless e invariant testing stateful.
+149 tests ejecutados contra fork de Ethereum Mainnet real (sin mocks). Los tests cubren flujos unitarios, integracion end-to-end, fuzz testing stateless e invariant testing stateful.
 
 ```bash
 # Configurar RPC
 export MAINNET_RPC_URL="https://eth-mainnet.g.alchemy.com/v2/<API_KEY>"
 
-# Ejecutar unit + integration + fuzz (148 tests)
+# Ejecutar unit + integration + fuzz (149 tests)
 forge test --no-match-path "test/invariant/*" -vv
 
 # Ejecutar invariant tests via Anvil (4 invariantes)
@@ -157,7 +158,7 @@ forge coverage --no-match-path "test/invariant/*" --ir-minimum
 
 | Capa        | Tests                  | Ficheros                                                                                                                                                                                                 |
 | ----------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Unit        | 132                    | `test/unit/Vault.t.sol`, `test/unit/StrategyManager.t.sol`, `test/unit/LidoStrategy.t.sol`, `test/unit/AaveStrategy.t.sol`, `test/unit/CurveStrategy.t.sol`, `test/unit/UniswapV3Strategy.t.sol`, `test/unit/Router.t.sol` |
+| Unit        | 145                    | `test/unit/Vault.t.sol`, `test/unit/StrategyManager.t.sol`, `test/unit/LidoStrategy.t.sol`, `test/unit/AaveStrategy.t.sol`, `test/unit/CurveStrategy.t.sol`, `test/unit/UniswapV3Strategy.t.sol`, `test/unit/Router.t.sol` |
 | Integration | 10                     | `test/integration/FullFlow.t.sol`                                                                                                                                                                        |
 | Fuzz        | 6 (256 runs c/u)       | `test/fuzz/Fuzz.t.sol`                                                                                                                                                                                   |
 | Invariant   | 4 (32 runs x 15 depth) | `test/invariant/Invariants.t.sol`                                                                                                                                                                        |
@@ -188,14 +189,14 @@ Verifica que el Router nunca retiene WETH ni ETH entre transacciones.
 
 | Contrato              | Lines      | Statements | Branches   | Functions  |
 | --------------------- | ---------- | ---------- | ---------- | ---------- |
-| Vault.sol             | 92.31%     | 87.70%     | 55.26%     | 100.00%    |
-| StrategyManager.sol   | 81.91%     | 80.72%     | 51.16%     | 100.00%    |
+| Vault.sol             | 92.51%     | 88.02%     | 55.26%     | 100.00%    |
+| StrategyManager.sol   | 81.46%     | 81.27%     | 52.08%     | 100.00%    |
 | AaveStrategy.sol      | 71.95%     | 69.89%     | 41.67%     | 91.67%     |
 | CurveStrategy.sol     | 95.12%     | 97.09%     | 71.43%     | 100.00%    |
 | LidoStrategy.sol      | 90.91%     | 91.30%     | 66.67%     | 90.00%     |
 | UniswapV3Strategy.sol | 75.21%     | 75.51%     | 50.00%     | 100.00%    |
 | Router.sol            | 98.36%     | 80.95%     | 28.57%     | 100.00%    |
-| **Total**             | **85.53%** | **82.62%** | **49.68%** | **98.20%** |
+| **Total**             | **85.42%** | **82.83%** | **50.00%** | **98.23%** |
 
 ## Deployment
 
@@ -267,6 +268,33 @@ forge script script/DeployAggressive.s.sol --rpc-url $MAINNET_RPC_URL --broadcas
 - **[FLOWS.md](docs/FLOWS.md)** - Flujos operativos detallados (deposit, withdraw, harvest, rebalance, router)
 - **[SECURITY.md](docs/SECURITY.md)** - Consideraciones de seguridad, supuestos de confianza y limitaciones
 - **[TESTS.md](docs/TESTS.md)** - Suite de tests, coverage y convenciones
+
+## Security & Emergency Procedures
+
+### Retiros Siempre Habilitados
+
+Los retiros (`withdraw`, `redeem`) **nunca se bloquean**, ni siquiera cuando el vault esta pausado. La pausa solo bloquea nuevos depositos (`deposit`, `mint`), `harvest` y `allocateIdle`. Un usuario siempre puede recuperar sus fondos.
+
+### Emergency Exit
+
+Si se detecta un exploit activo o bug critico, el protocolo permite drenar todas las estrategias y devolver los fondos al vault:
+
+```solidity
+// 1. Pausar el vault (bloquea nuevos depositos, retiros siguen habilitados)
+vault.pause();
+
+// 2. Drenar todas las estrategias al vault (try-catch por estrategia)
+manager.emergencyExit();
+
+// 3. Reconciliar accounting del vault
+vault.syncIdleBuffer();
+```
+
+Tras esta secuencia, todos los fondos estan en el idle buffer del vault y los usuarios pueden retirar normalmente via `withdraw()` o `redeem()`.
+
+**Fail-safe**: Si una estrategia falla durante el drenaje, las demas continuan. La estrategia problematica se gestiona por separado.
+
+Para documentacion detallada de seguridad, ver [SECURITY.md](docs/SECURITY.md).
 
 ## Consideraciones Educacionales
 
