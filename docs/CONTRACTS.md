@@ -2,6 +2,17 @@
 
 Este documento proporciona documentación técnica detallada de cada contrato del protocolo VynX V2, incluyendo variables de estado, funciones principales, eventos y modificadores.
 
+**Contratos documentados:**
+- [Vault.sol](#vaultsol) — ERC4626 vault con idle buffer y fees
+- [StrategyManager.sol](#strategymanagersol) — Motor de allocation y rebalancing
+- [LidoStrategy.sol](#lidostrategysol) — Lido staking: WETH → wstETH (auto-compound)
+- [AaveStrategy.sol](#aavestrategy-wstethsol) — Doble yield: wstETH + Aave lending
+- [CurveStrategy.sol](#curvestrategysol) — Curve stETH/ETH LP + gauge CRV
+- [UniswapV3Strategy.sol](#uniswapv3strategysol) — Liquidez concentrada WETH/USDC ±10%
+- [IStrategy.sol](#istrategysol) — Interfaz estándar de estrategias
+- [Router.sol](#routersol) — Router multi-token (ETH/ERC20 → WETH → Vault)
+- [IRouter.sol](#iroutersol) — Interfaz del Router
+
 ---
 
 ## Vault.sol
@@ -53,19 +64,19 @@ uint256 public idle_buffer;                           // WETH acumulado pendient
 uint256 public last_harvest;                          // Timestamp del último harvest
 uint256 public total_harvested;                       // Profit bruto total acumulado
 
-// Parámetros de harvest
-uint256 public min_profit_for_harvest = 0.1 ether;   // Profit mínimo para ejecutar harvest
-uint256 public keeper_incentive = 100;                // 1% (100 bp) del profit para keepers ext.
+// Parámetros de harvest (configurables por tier)
+uint256 public min_profit_for_harvest;               // 0.08 ETH (Balanced) / 0.12 ETH (Aggressive)
+uint256 public keeper_incentive = 100;               // 1% (100 bp) del profit para keepers ext.
 
 // Parámetros de fees
-uint256 public performance_fee = 2000;                // 20% (2000 bp) sobre profits
-uint256 public treasury_split = 8000;                 // 80% del perf fee → treasury (shares)
-uint256 public founder_split = 2000;                  // 20% del perf fee → founder (WETH)
+uint256 public performance_fee = 2000;               // 20% (2000 bp) sobre profits
+uint256 public treasury_split = 8000;                // 80% del perf fee → treasury (shares)
+uint256 public founder_split = 2000;                 // 20% del perf fee → founder (WETH)
 
-// Circuit breakers
-uint256 public min_deposit = 0.01 ether;              // Anti-spam, anti-rounding
-uint256 public idle_threshold = 10 ether;             // Threshold para auto-allocate
-uint256 public max_tvl = 1000 ether;                  // TVL máximo permitido
+// Circuit breakers (configurables por tier)
+uint256 public min_deposit = 0.01 ether;             // Anti-spam, anti-rounding
+uint256 public idle_threshold;                       // 8 ETH (Balanced) / 12 ETH (Aggressive)
+uint256 public max_tvl = 1000 ether;                 // TVL máximo permitido
 ```
 
 ### Funciones Principales
@@ -81,7 +92,7 @@ Deposita WETH en el vault y mintea shares al usuario.
 4. Transfiere WETH del usuario al vault (`SafeERC20.safeTransferFrom`)
 5. Incrementa `idle_buffer += assets` (acumula en buffer)
 6. Mintea shares al receiver (`_mint`)
-7. Si `idle_buffer >= idle_threshold` (10 ETH), auto-ejecuta `_allocateIdle()`
+7. Si `idle_buffer >= idle_threshold` (8 ETH Balanced / 12 ETH Aggressive), auto-ejecuta `_allocateIdle()`
 
 **Modificadores**: `whenNotPaused`
 
@@ -122,7 +133,7 @@ Retira cantidad exacta de WETH quemando shares necesarias.
 
 **Eventos**: `Withdrawn(receiver, assets, shares)`
 
-**Nota sobre rounding**: Protocolos externos (Aave, Compound) redondean a la baja ~1-2 wei por operación. El vault tolera hasta 20 wei de diferencia (margen para ~10 estrategias futuras). Si la diferencia excede 20 wei, revierte con "Excessive rounding" (problema de accounting serio).
+**Nota sobre rounding**: Protocolos externos (Aave, Curve, Uniswap V3) pueden redondear a la baja ~1-2 wei por operación. El vault tolera hasta 20 wei de diferencia (margen para hasta ~10 estrategias). Si la diferencia excede 20 wei, revierte con "Excessive rounding" (problema de accounting serio).
 
 ---
 
@@ -148,7 +159,7 @@ Cosecha rewards de todas las estrategias y distribuye performance fees.
 
 **Flujo:**
 1. Llama `IStrategyManager(strategy_manager).harvest()` → obtiene `profit`
-2. Si `profit < min_profit_for_harvest` (0.1 ETH) → return 0 (no distribuye)
+2. Si `profit < min_profit_for_harvest` (0.08 ETH Balanced / 0.12 ETH Aggressive) → return 0 (no distribuye)
 3. Si caller no es keeper oficial:
    - Calcula `keeper_reward = (profit * keeper_incentive) / BASIS_POINTS`
    - Paga desde `idle_buffer` si hay suficiente, sino retira de estrategias
@@ -369,13 +380,13 @@ IStrategy[] public strategies;
 mapping(address => bool) public is_strategy;
 mapping(IStrategy => uint256) public target_allocation;       // En basis points
 
-// Parámetros de allocation
-uint256 public max_allocation_per_strategy = 5000;           // 50%
-uint256 public min_allocation_threshold = 1000;              // 10%
+// Parámetros de allocation (configurables por tier)
+uint256 public max_allocation_per_strategy;   // 5000 bp Balanced (50%) / 7000 bp Aggressive (70%)
+uint256 public min_allocation_threshold;      // 2000 bp Balanced (20%) / 1000 bp Aggressive (10%)
 
-// Parámetros de rebalancing
-uint256 public rebalance_threshold = 200;                    // 2% diferencia de APY
-uint256 public min_tvl_for_rebalance = 10 ether;
+// Parámetros de rebalancing (configurables por tier)
+uint256 public rebalance_threshold;           // 200 bp Balanced (2%) / 300 bp Aggressive (3%)
+uint256 public min_tvl_for_rebalance;         // 8 ETH Balanced / 12 ETH Aggressive
 ```
 
 ### Funciones Principales
@@ -402,11 +413,12 @@ Distribuye WETH entre estrategias según target allocation.
 
 **Eventos**: `Allocated(strategy, assets)` por cada estrategia
 
-**Ejemplo:**
+**Ejemplo (Tier Balanced con 3 estrategias):**
 ```solidity
-// Si recibe 100 WETH y targets son [5000, 5000] (50%, 50%):
-// - AaveStrategy recibe 50 WETH
-// - CompoundStrategy recibe 50 WETH
+// Si recibe 100 WETH y targets son [3000, 4000, 3000] (30%, 40%, 30%):
+// - LidoStrategy recibe 30 WETH
+// - AaveStrategy recibe 40 WETH
+// - CurveStrategy recibe 30 WETH
 ```
 
 ---
@@ -431,13 +443,14 @@ Retira WETH de estrategias proporcionalmente y transfiere al receiver.
 
 **Nota**: Retira proporcionalmente para mantener ratios. NO recalcula target allocation (ahorro de gas). Usa `actual_withdrawn` para contabilizar rounding de protocolos externos.
 
-**Ejemplo:**
+**Ejemplo (Tier Balanced con 3 estrategias):**
 ```solidity
-// Estado: Aave 70 WETH, Compound 30 WETH (total 100 WETH)
+// Estado: Lido 40 WETH, Aave 40 WETH, Curve 20 WETH (total 100 WETH)
 // Usuario retira 50 WETH
-// - De Aave: 50 * 70/100 = 35 WETH (real: ~34.999999999999999998)
-// - De Compound: 50 * 30/100 = 15 WETH (real: ~14.999999999999999999)
-// Resultado: Aave 35 WETH, Compound 15 WETH (mantiene ratio 70/30)
+// - De Lido:  50 * 40/100 = 20 WETH
+// - De Aave:  50 * 40/100 = 20 WETH
+// - De Curve: 50 * 20/100 = 10 WETH
+// Resultado: Lido 20, Aave 20, Curve 10 (mantiene ratios 40/40/20)
 ```
 
 ---
@@ -456,7 +469,7 @@ Cosecha rewards de todas las estrategias con fail-safe.
 
 **Eventos**: `Harvested(total_profit)`, `HarvestFailed(strategy, reason)` si alguna falla
 
-**Nota**: El fail-safe es crítico — si Aave harvest falla por falta de rewards, Compound harvest continúa normalmente.
+**Nota**: El fail-safe es crítico — si CurveStrategy harvest falla por falta de rewards, LidoStrategy y AaveStrategy continúan normalmente. LidoStrategy siempre retorna 0 desde harvest (sin harvest activo).
 
 ---
 
@@ -487,14 +500,15 @@ Ajusta cada estrategia a su target allocation moviendo solo deltas necesarios.
 
 **Eventos**: `Rebalanced(from_strategy, to_strategy, assets)`
 
-**Ejemplo:**
+**Ejemplo (Tier Aggressive: Curve 6% vs UniswapV3 14%):**
 ```solidity
-// Estado actual: Aave 70 WETH (3.5% APY), Compound 30 WETH (6% APY)
-// Targets: Aave ~37% (37 WETH), Compound ~63% (63 WETH)
+// Estado actual: Curve 50 WETH (6% APY), UniswapV3 50 WETH (14% APY)
+// Targets recalculados: Curve ~30% (30 WETH), UniswapV3 ~70% (70 WETH)
 // Rebalance:
-//   1. Retira 33 WETH de Aave
-//   2. Deposita 33 WETH en Compound
-// Estado final: Aave 37 WETH, Compound 63 WETH
+//   1. Retira 20 WETH de CurveStrategy
+//   2. Deposita 20 WETH en UniswapV3Strategy
+// Estado final: Curve 30 WETH, UniswapV3 70 WETH
+// (APY diferencia: 14-6 = 8% >= 3% threshold → rebalance válido)
 ```
 
 ---
@@ -511,12 +525,12 @@ Verifica si un rebalance es rentable comparando diferencia de APY entre estrateg
 
 **Nota**: Es función `view` (no modifica estado), puede ser llamada por bots/frontends.
 
-**Ejemplo de cálculo:**
+**Ejemplo de cálculo (Tier Aggressive):**
 ```solidity
-// Aave APY: 3.5% (350 bp), Compound APY: 6% (600 bp)
-// Diferencia: 600 - 350 = 250 bp
-// Threshold: 200 bp
-// 250 >= 200 → ✅ shouldRebalance = true
+// Curve APY: 6% (600 bp), UniswapV3 APY: 14% (1400 bp)
+// Diferencia: 1400 - 600 = 800 bp
+// Threshold Aggressive: 300 bp
+// 800 >= 300 → ✅ shouldRebalance = true
 ```
 
 ---
@@ -600,8 +614,12 @@ Calcula targets y escribe a storage.
 ### Inicialización
 
 ```solidity
-// Constructor: solo recibe asset
-constructor(address _asset)
+// Constructor: recibe asset y TierConfig
+constructor(address _asset, TierConfig memory tier_config)
+    // tier_config.max_allocation_per_strategy: 5000 (Balanced) / 7000 (Aggressive)
+    // tier_config.min_allocation_threshold: 2000 (Balanced) / 1000 (Aggressive)
+    // tier_config.rebalance_threshold: 200 (Balanced) / 300 (Aggressive)
+    // tier_config.min_tvl_for_rebalance: 8 ETH (Balanced) / 12 ETH (Aggressive)
 
 // initialize: resuelve dependencia circular vault ↔ manager
 function initialize(address _vault) external onlyOwner
@@ -677,13 +695,17 @@ error StrategyManager__InvalidVaultAddress();
 
 ---
 
-## AaveStrategy.sol
+## LidoStrategy.sol
 
-**Ubicación**: `src/strategies/AaveStrategy.sol`
+**Ubicación**: `src/strategies/LidoStrategy.sol`
 
 ### Propósito
 
-Integración con Aave v3 para depositar WETH y generar yield mediante lending. Incluye harvest de rewards AAVE con swap automático a WETH via Uniswap V3 y reinversión automática (auto-compound).
+Staking líquido con auto-compounding via wstETH. Deposita WETH en Lido para obtener stETH y lo wrappea en wstETH. El yield crece automáticamente en el tipo de cambio wstETH/stETH sin necesidad de harvest activo. APY estimado: **4% (400 bp)**.
+
+### Tier
+
+Disponible en: **Balanced**
 
 ### Implementa
 
@@ -695,87 +717,62 @@ Integración con Aave v3 para depositar WETH y generar yield mediante lending. I
 
 ### Llama A
 
-- **IPool (Aave v3)**: `supply()`, `withdraw()`, `getReserveData()`
-- **IRewardsController (Aave)**: `claimAllRewards()` — claimea AAVE tokens acumulados
-- **ISwapRouter (Uniswap V3)**: `exactInputSingle()` — swap AAVE → WETH
-- **IERC20(WETH)**: Transferencias con SafeERC20
+- **IWETH**: `withdraw()` — unwrap WETH a ETH para enviar a Lido
+- **ILido**: `receive()` — envía ETH, recibe stETH (submit via `receive()`)
+- **IWstETH**: `wrap(stETH)` — convierte stETH a wstETH; `getStETHByWstETH()` — precio actual
+- **ISwapRouter (Uniswap V3)**: `exactInputSingle()` — swap wstETH → WETH durante withdraw
 
 ### Variables de Estado
 
 ```solidity
-// Constantes
-uint256 public constant BASIS_POINTS = 10000;
-uint256 public constant MAX_SLIPPAGE_BPS = 100;       // 1% max slippage en swaps
-
 // Inmutables
-address public immutable manager;                       // StrategyManager autorizado
-IPool private immutable aave_pool;                     // Aave v3 Pool
-IRewardsController private immutable rewards_controller;// Aave rewards controller
-address private immutable asset_address;               // WETH
-IAToken private immutable a_token;                     // aWETH (rebasing token)
-address private immutable reward_token;                // AAVE governance token
-ISwapRouter private immutable uniswap_router;          // Uniswap V3 Router
-uint24 private immutable pool_fee;                     // 3000 (0.3%)
+address public immutable manager;            // StrategyManager autorizado
+address private immutable asset_address;     // WETH
+address private immutable wsteth;            // wstETH token
+address private immutable lido;              // Lido stETH contract
+ISwapRouter private immutable swap_router;   // Uniswap V3 Router
+
+// APY hardcodeado
+uint256 private constant LIDO_APY = 400;     // 4% (400 bp)
 ```
 
 ### Funciones Principales
 
 #### deposit(uint256 assets) → uint256 shares
 
-Deposita WETH en Aave v3.
+Convierte WETH a wstETH vía Lido y lo retiene.
 
 **Precondición**: WETH debe estar en la estrategia (transferido por manager).
 
 **Flujo:**
-1. Llama `aave_pool.supply(weth, assets, address(this), 0)`
-2. Recibe aWETH 1:1 (shares = assets)
-3. Emite `Deposited(msg.sender, assets, shares)`
+1. `IWETH(asset_address).withdraw(assets)` — unwrap WETH a ETH
+2. `ILido(lido).receive{value: assets}()` — submit ETH a Lido → recibe stETH
+3. `IWstETH(wsteth).wrap(steth_balance)` — convierte stETH a wstETH
+4. Emite `Deposited(msg.sender, assets, shares)`
 
 **Modificadores**: `onlyManager`
-
-**Nota**: aWETH hace rebase automático, el balance incrementa con yield.
 
 ---
 
 #### withdraw(uint256 assets) → uint256 actual_withdrawn
 
-Retira WETH de Aave v3.
+Swap wstETH → WETH via Uniswap V3 y transfiere al manager.
 
 **Flujo:**
-1. Llama `aave_pool.withdraw(weth, assets, address(this))`
-2. Quema aWETH, recibe WETH (1:1 + yield acumulado)
-3. Transfiere WETH al manager: `safeTransfer(msg.sender, actual_withdrawn)`
+1. Calcula `wsteth_to_sell`: proporción de wstETH correspondiente a `assets` WETH
+2. Swap: `uniswap_router.exactInputSingle(wstETH → WETH, 0.05% fee, 99% min out)`
+3. Transfiere WETH al manager
 4. Emite `Withdrawn(msg.sender, actual_withdrawn, assets)`
 
 **Modificadores**: `onlyManager`
+
+**Nota**: El swap se realiza en el pool wstETH/WETH 0.05% de Uniswap V3. Se aplica 1% máximo de slippage.
 
 ---
 
 #### harvest() → uint256 profit
 
-Cosecha rewards AAVE, swap a WETH via Uniswap V3, re-invierte en Aave.
-
-**Flujo:**
-1. Construye array con dirección del aToken
-2. Llama `rewards_controller.claimAllRewards([aToken])` → recibe AAVE tokens
-3. Si no hay rewards → return 0
-4. Calcula `min_amount_out = (claimed * (BASIS_POINTS - MAX_SLIPPAGE_BPS)) / BASIS_POINTS`
-   - Con MAX_SLIPPAGE_BPS = 100: `min_out = claimed * 9900 / 10000` (1% slippage max)
-5. Ejecuta swap via Uniswap V3:
-   ```solidity
-   uniswap_router.exactInputSingle(
-       tokenIn: reward_token,     // AAVE
-       tokenOut: asset_address,   // WETH
-       fee: pool_fee,             // 3000 (0.3%)
-       recipient: address(this),
-       amountIn: claimed,
-       amountOutMinimum: min_amount_out,
-       sqrtPriceLimitX96: 0
-   )
-   ```
-6. Re-supply: `aave_pool.supply(weth, amount_out, address(this), 0)` (auto-compound)
-7. Return `profit = amount_out`
-8. Emite `Harvested(msg.sender, profit)`
+**Siempre retorna 0.** El yield de Lido es auto-compuesto en el tipo de cambio wstETH/stETH. No hay rewards externos que claimear.
 
 **Modificadores**: `onlyManager`
 
@@ -783,31 +780,173 @@ Cosecha rewards AAVE, swap a WETH via Uniswap V3, re-invierte en Aave.
 
 #### totalAssets() → uint256
 
-Balance actual de WETH en Aave (incluye yield).
+Valor WETH-equivalente de todo el wstETH en custodia.
 
 ```solidity
 function totalAssets() external view returns (uint256) {
-    return a_token.balanceOf(address(this));
+    uint256 wst_balance = wstEthBalance();
+    return IWstETH(wsteth).getStETHByWstETH(wst_balance);
+    // getStETHByWstETH convierte wstETH a stETH usando el tipo de cambio actual
+    // stETH ≈ ETH ≈ WETH (peg razonablemente estable)
 }
 ```
 
-**Nota**: aWETH hace rebase, balance incrementa automáticamente con yield.
+**Nota**: El valor crece automáticamente con el tiempo a medida que el tipo de cambio wstETH/stETH aumenta con los rewards del staking.
 
 ---
 
 #### apy() → uint256
 
-APY actual de Aave para WETH.
+Retorna APY hardcodeado: 400 bp (4%).
+
+---
+
+### Funciones de Utilidad
+
+```solidity
+function wstEthBalance() public view returns (uint256)
+    // Balance de wstETH de la estrategia
+```
+
+### Errores Custom
+
+```solidity
+error LidoStrategy__OnlyManager();
+error LidoStrategy__ZeroAmount();
+error LidoStrategy__DepositFailed();
+error LidoStrategy__SwapFailed();
+```
+
+---
+
+## AaveStrategy (wstETH).sol
+
+**Ubicación**: `src/strategies/AaveStrategy.sol`
+
+### Propósito
+
+Doble yield — deposita wstETH en Aave v3 obteniendo Lido staking yield (~4%) + Aave lending yield (~3.5%) simultáneamente. Incluye harvest de rewards AAVE con swap automático a WETH y reinversión como wstETH (auto-compound). APY: **dinámico** (lee Aave liquidity rate on-chain).
+
+### Tier
+
+Disponible en: **Balanced**
+
+### Implementa
+
+- `IStrategy`: Interfaz estándar de estrategias
+
+### Llamado Por
+
+- **StrategyManager**: `deposit()`, `withdraw()`, `harvest()`, `totalAssets()`, `apy()`
+
+### Llama A
+
+- **IWETH**: `withdraw()` — unwrap WETH a ETH
+- **ILido**: `receive()` — ETH → stETH
+- **IWstETH**: `wrap()` / `unwrap()` — stETH ↔ wstETH
+- **IPool (Aave v3)**: `supply(wstETH)`, `withdraw(wstETH)`, `getReserveData(wstETH)`
+- **IRewardsController (Aave)**: `claimAllRewards([aWstETH])` — claimea AAVE tokens
+- **ISwapRouter (Uniswap V3)**: `exactInputSingle()` — swap AAVE → WETH (harvest), swap stETH → ETH via Curve (withdraw)
+- **ICurvePool**: `exchange(stETH, ETH)` — durante withdraw para convertir stETH a ETH
+
+### Variables de Estado
+
+```solidity
+// Inmutables
+address public immutable manager;                    // StrategyManager autorizado
+IPool private immutable aave_pool;                   // Aave v3 Pool
+IRewardsController private immutable rewards_controller; // Aave rewards controller
+address private immutable asset_address;             // WETH
+address private immutable a_wst_eth;                 // aWstETH (rebasing token Aave)
+address private immutable wst_eth;                   // wstETH token
+address private immutable lido;                      // Lido stETH contract
+address private immutable st_eth;                    // stETH token
+address private immutable reward_token;              // AAVE governance token
+ISwapRouter private immutable uniswap_router;        // Uniswap V3 Router
+ICurvePool private immutable curve_pool;             // Curve stETH/ETH pool (para withdraw)
+uint24 private immutable pool_fee;                   // 3000 (0.3%)
+```
+
+### Funciones Principales
+
+#### deposit(uint256 assets) → uint256 shares
+
+WETH → ETH → stETH → wstETH → Aave supply.
+
+**Precondición**: WETH debe estar en la estrategia (transferido por manager).
 
 **Flujo:**
-1. Obtiene reserve data: `aave_pool.getReserveData(weth)`
-2. Extrae liquidity rate (en RAY = 1e27)
-3. Convierte a basis points: `apy = liquidity_rate / 1e23`
+1. `IWETH.withdraw(assets)` — unwrap a ETH
+2. `ILido.receive{value: assets}()` — ETH → stETH
+3. `IWstETH.wrap(steth_balance)` — stETH → wstETH
+4. `aave_pool.supply(wst_eth, wsteth_balance, address(this), 0)` — wstETH → aWstETH
+5. Emite `Deposited(msg.sender, assets, shares)`
+
+**Modificadores**: `onlyManager`
+
+---
+
+#### withdraw(uint256 assets) → uint256 actual_withdrawn
+
+aWstETH → wstETH → stETH → ETH (Curve) → WETH.
+
+**Flujo:**
+1. Calcula `wsteth_to_withdraw` proporcional a `assets`
+2. `aave_pool.withdraw(wst_eth, wsteth_to_withdraw, address(this))` — aWstETH → wstETH
+3. `IWstETH.unwrap(wsteth_received)` — wstETH → stETH
+4. `curve_pool.exchange(1, 0, steth_amount, min_eth_out)` — stETH → ETH (índice 1→0)
+5. `IWETH.deposit{value: eth_received}()` — ETH → WETH
+6. Transfiere WETH al manager
+7. Emite `Withdrawn(msg.sender, actual_withdrawn, assets)`
+
+**Modificadores**: `onlyManager`
+
+---
+
+#### harvest() → uint256 profit
+
+Claimea AAVE rewards → swap WETH → reinvierte como wstETH en Aave.
+
+**Flujo:**
+1. `rewards_controller.claimAllRewards([a_wst_eth])` → recibe AAVE tokens
+2. Si no hay rewards → return 0
+3. Swap: `uniswap_router.exactInputSingle(AAVE → WETH, 0.3% fee, 1% max slippage)`
+4. `IWETH.withdraw(weth_received)` → ETH → stETH → wstETH → `aave_pool.supply(wstETH)` [auto-compound]
+5. Return `profit = weth_received`
+6. Emite `Harvested(msg.sender, profit)`
+
+**Modificadores**: `onlyManager`
+
+---
+
+#### totalAssets() → uint256
+
+Valor en WETH del aWstETH en custodia usando tipo de cambio wstETH actual.
+
+```solidity
+function totalAssets() external view returns (uint256) {
+    uint256 a_wst_eth_balance = IERC20(a_wst_eth).balanceOf(address(this));
+    return IWstETH(wst_eth).getStETHByWstETH(a_wst_eth_balance);
+    // aWstETH hace rebase automático; getStETHByWstETH convierte al tipo de cambio actual
+}
+```
+
+---
+
+#### apy() → uint256
+
+APY dinámico de Aave para wstETH. Lee `liquidityRate` on-chain.
+
+**Flujo:**
+1. `aave_pool.getReserveData(wst_eth)` → `DataTypes.ReserveData`
+2. Extrae `liquidityRate` (en RAY = 1e27)
+3. Convierte: `apy = liquidityRate / 1e23` (RAY → basis points)
 
 **Ejemplo:**
 ```solidity
-// liquidity_rate = 35000000000000000000000000 (RAY)
-// apy = 35000000000000000000000000 / 1e23 = 350 basis points = 3.5%
+// liquidityRate wstETH = 35000000000000000000000000 (RAY) ≈ 3.5%
+// apy = 35000000000000000000000000 / 1e23 = 350 basis points
+// (No incluye el Lido staking yield — ese se contabiliza vía tipo de cambio)
 ```
 
 ---
@@ -816,22 +955,13 @@ APY actual de Aave para WETH.
 
 ```solidity
 function availableLiquidity() external view returns (uint256)
-    // Liquidez disponible en Aave para withdraws
+    // Liquidez disponible en Aave v3 para wstETH withdraws
 
 function aTokenBalance() external view returns (uint256)
-    // Balance de aWETH de la estrategia
+    // Balance de aWstETH de la estrategia
 
 function pendingRewards() external view returns (uint256)
     // Rewards AAVE pendientes de claimear
-```
-
-### Modificadores
-
-```solidity
-modifier onlyManager() {
-    if (msg.sender != manager) revert AaveStrategy__OnlyManager();
-    _;
-}
 ```
 
 ### Errores Custom
@@ -842,17 +972,22 @@ error AaveStrategy__WithdrawFailed();
 error AaveStrategy__OnlyManager();
 error AaveStrategy__HarvestFailed();
 error AaveStrategy__SwapFailed();
+error AaveStrategy__ZeroAmount();
 ```
 
 ---
 
-## CompoundStrategy.sol
+## CurveStrategy.sol
 
-**Ubicación**: `src/strategies/CompoundStrategy.sol`
+**Ubicación**: `src/strategies/CurveStrategy.sol`
 
 ### Propósito
 
-Integración con Compound v3 para depositar WETH y generar yield mediante lending. Incluye harvest de rewards COMP con swap automático a WETH via Uniswap V3 y reinversión automática (auto-compound).
+Provisión de liquidez en el pool stETH/ETH de Curve y staking de LP tokens en el gauge para acumular rewards CRV. Genera yield de dos fuentes: trading fees del pool (~1-2%) + rewards CRV del gauge (~4%). APY estimado: **6% (600 bp)**.
+
+### Tier
+
+Disponible en: **Balanced** y **Aggressive**
 
 ### Implementa
 
@@ -864,90 +999,76 @@ Integración con Compound v3 para depositar WETH y generar yield mediante lendin
 
 ### Llama A
 
-- **ICometMarket (Compound v3)**: `supply()`, `withdraw()`, `balanceOf()`, `getSupplyRate()`, `getUtilization()`
-- **ICometRewards (Compound v3)**: `claim()` — claimea COMP tokens acumulados
-- **ISwapRouter (Uniswap V3)**: `exactInputSingle()` — swap COMP → WETH
-- **IERC20(WETH)**: Transferencias con SafeERC20
+- **IWETH**: `withdraw()` — unwrap WETH a ETH
+- **ILido**: `receive()` — ETH → stETH (durante depósito, para balancear el par)
+- **ICurvePool**: `add_liquidity([eth, steth])`, `remove_liquidity_one_coin(lp, 0)`, `get_virtual_price()`
+- **ICurveGauge**: `deposit(LP)`, `withdraw(LP)`, `claim_rewards()`, `balanceOf()`
+- **ISwapRouter (Uniswap V3)**: `exactInputSingle(CRV → WETH, 0.3% fee)` — durante harvest
 
 ### Variables de Estado
 
 ```solidity
-// Constantes
-uint256 public constant BASIS_POINTS = 10000;
-uint256 public constant MAX_SLIPPAGE_BPS = 100;       // 1% max slippage en swaps
-
 // Inmutables
-address public immutable manager;                       // StrategyManager autorizado
-ICometMarket private immutable compound_comet;         // Compound v3 Comet
-ICometRewards private immutable compound_rewards;      // Compound rewards controller
-address private immutable asset_address;               // WETH
-address private immutable reward_token;                // COMP token
-ISwapRouter private immutable uniswap_router;          // Uniswap V3 Router
-uint24 private immutable pool_fee;                     // 3000 (0.3%)
+address public immutable manager;            // StrategyManager autorizado
+address private immutable asset_address;     // WETH
+ICurvePool private immutable pool;           // Curve stETH/ETH pool
+ICurveGauge private immutable gauge;         // Curve gauge (staking de LP)
+address private immutable lp_token;          // LP token del pool
+address private immutable lido;              // Lido stETH contract
+address private immutable crv_token;         // CRV governance token
+ISwapRouter private immutable swap_router;   // Uniswap V3 Router
+
+// APY hardcodeado
+uint256 private constant CURVE_APY = 600;    // 6% (600 bp)
 ```
 
 ### Funciones Principales
 
 #### deposit(uint256 assets) → uint256 shares
 
-Deposita WETH en Compound v3.
+WETH → ETH → stETH → add_liquidity → LP → gauge stake.
 
 **Precondición**: WETH debe estar en la estrategia (transferido por manager).
 
 **Flujo:**
-1. Llama `compound_comet.supply(weth, assets)`
-2. Balance interno de Compound incrementa (no hay cToken en v3)
-3. Retorna shares = assets (1:1)
-4. Emite `Deposited(msg.sender, assets, shares)`
+1. `IWETH.withdraw(assets)` — unwrap WETH a ETH
+2. Divide ETH en dos mitades: 50% se envía a Lido, 50% se usa como ETH directo
+3. `ILido.receive{value: half}()` — ETH → stETH
+4. `pool.add_liquidity([eth_half, steth_received], min_lp_out)` — ETH + stETH → LP tokens
+5. `gauge.deposit(lp_balance)` — stakea LP en gauge
+6. Emite `Deposited(msg.sender, assets, shares)`
 
 **Modificadores**: `onlyManager`
-
-**Nota**: Compound v3 usa accounting interno (no tokens), balance incrementa con yield.
 
 ---
 
 #### withdraw(uint256 assets) → uint256 actual_withdrawn
 
-Retira WETH de Compound v3.
+gauge.withdraw → remove_liquidity_one_coin → ETH → WETH.
 
 **Flujo:**
-1. Captura `balance_before = IERC20(asset).balanceOf(address(this))`
-2. Llama `compound_comet.withdraw(weth, assets)`
-3. Captura `balance_after = IERC20(asset).balanceOf(address(this))`
-4. Calcula `actual_withdrawn = balance_after - balance_before` (captura rounding)
-5. Transfiere WETH al manager: `safeTransfer(msg.sender, actual_withdrawn)`
+1. Calcula `lp_to_withdraw` proporcional a `assets` / `totalAssets()`
+2. `gauge.withdraw(lp_to_withdraw)` — desestakea LP del gauge
+3. `pool.remove_liquidity_one_coin(lp_to_withdraw, 0, min_eth_out)` — LP → ETH (índice 0)
+4. `IWETH.deposit{value: eth_received}()` — ETH → WETH
+5. Transfiere WETH al manager
 6. Emite `Withdrawn(msg.sender, actual_withdrawn, assets)`
 
 **Modificadores**: `onlyManager`
-
-**Nota**: Usa pattern `balance_before/balance_after` para capturar el monto realmente retirado. Compound puede redondear ~1-2 wei a la baja.
 
 ---
 
 #### harvest() → uint256 profit
 
-Cosecha rewards COMP, swap a WETH via Uniswap V3, re-invierte en Compound.
+Claimea CRV rewards → swap WETH → reinvierte como LP.
 
 **Flujo:**
-1. Llama `compound_rewards.claim(comet, address(this), true)` → recibe COMP tokens
-2. Obtiene `reward_amount = IERC20(reward_token).balanceOf(address(this))`
-3. Si no hay rewards → return 0
-4. Calcula `min_amount_out = (reward_amount * 9900) / 10000` (1% slippage max)
-5. Ejecuta swap via Uniswap V3:
-   ```solidity
-   uniswap_router.exactInputSingle(
-       tokenIn: reward_token,     // COMP
-       tokenOut: asset_address,   // WETH
-       fee: pool_fee,             // 3000 (0.3%)
-       recipient: address(this),
-       amountIn: reward_amount,
-       amountOutMinimum: min_amount_out,
-       sqrtPriceLimitX96: 0
-   )
-   ```
-6. Re-supply: `compound_comet.supply(weth, amount_out)` (auto-compound)
-7. Return `profit = amount_out`
-8. Emite `Harvested(msg.sender, profit)`
+1. `gauge.claim_rewards()` → recibe CRV tokens
+2. Si balance CRV == 0 → return 0
+3. Swap: `uniswap_router.exactInputSingle(CRV → WETH, 0.3% fee, sin min_out)`
+4. Registra `profit = weth_received`
+5. Reinvierte: ETH + stETH → `pool.add_liquidity` → `gauge.deposit` [auto-compound]
+6. Emite `Harvested(msg.sender, profit)`
 
 **Modificadores**: `onlyManager`
 
@@ -955,71 +1076,189 @@ Cosecha rewards COMP, swap a WETH via Uniswap V3, re-invierte en Compound.
 
 #### totalAssets() → uint256
 
-Balance actual de WETH en Compound (incluye yield).
+Valor WETH de los LP tokens stakeados usando virtual price del pool.
 
 ```solidity
 function totalAssets() external view returns (uint256) {
-    return compound_comet.balanceOf(address(this));
+    uint256 lp = ICurveGauge(gauge).balanceOf(address(this));
+    return FullMath.mulDiv(lp, ICurvePool(pool).get_virtual_price(), 1e18);
+    // virtual_price crece con el tiempo reflejando trading fees acumulados
+    // Expresado en ETH equivalente (1e18 = 1 ETH por LP)
 }
 ```
-
-**Nota**: Balance interno incluye yield acumulado automáticamente.
 
 ---
 
 #### apy() → uint256
 
-APY actual de Compound para WETH.
-
-**Flujo:**
-1. Obtiene utilization: `utilization = compound_comet.getUtilization()`
-2. Obtiene supply rate: `rate = compound_comet.getSupplyRate(utilization)` (uint64, por segundo)
-3. Convierte a APY anual en basis points:
-   ```solidity
-   // rate está en base 1e18 por segundo
-   // APY = rate * seconds_per_year * 10000 / 1e18
-   // Simplificado: (rate * 315360000000) / 1e18
-   apy_basis_points = (uint256(rate) * 315360000000) / 1e18;
-   ```
-
-**Ejemplo:**
-```solidity
-// supply_rate = 1000000000000000 (1e15 per second)
-// APY = (1e15 * 315360000000) / 1e18 = 315 basis points = 3.15%
-```
+Retorna APY hardcodeado: 600 bp (6%).
 
 ---
 
 ### Funciones de Utilidad
 
 ```solidity
-function getSupplyRate() external view returns (uint256)
-    // Supply rate actual de Compound (convertido a uint256)
-
-function getUtilization() external view returns (uint256)
-    // Utilization actual del pool (borrowed / supplied)
-
-function pendingRewards() external view returns (uint256)
-    // Rewards COMP pendientes de claimear
-```
-
-### Modificadores
-
-```solidity
-modifier onlyManager() {
-    if (msg.sender != manager) revert CompoundStrategy__OnlyManager();
-    _;
-}
+function lpBalance() public view returns (uint256)
+    // Balance de LP tokens stakeados en el gauge
 ```
 
 ### Errores Custom
 
 ```solidity
-error CompoundStrategy__DepositFailed();
-error CompoundStrategy__WithdrawFailed();
-error CompoundStrategy__OnlyManager();
-error CompoundStrategy__HarvestFailed();
-error CompoundStrategy__SwapFailed();
+error CurveStrategy__OnlyManager();
+error CurveStrategy__ZeroAmount();
+error CurveStrategy__DepositFailed();
+error CurveStrategy__WithdrawFailed();
+error CurveStrategy__SwapFailed();
+```
+
+---
+
+## UniswapV3Strategy.sol
+
+**Ubicación**: `src/strategies/UniswapV3Strategy.sol`
+
+### Propósito
+
+Provisión de liquidez concentrada en el pool WETH/USDC 0.05% de Uniswap V3 para capturar trading fees. Mantiene una posición NFT única con rango fijo de ±960 ticks (≈ ±10% del precio actual en el momento del deploy). APY estimado: **14% (1400 bp)**, altamente variable según volumen del pool.
+
+### Tier
+
+Disponible en: **Aggressive**
+
+### Implementa
+
+- `IStrategy`: Interfaz estándar de estrategias
+
+### Llamado Por
+
+- **StrategyManager**: `deposit()`, `withdraw()`, `harvest()`, `totalAssets()`, `apy()`
+
+### Llama A
+
+- **INonfungiblePositionManager**: `mint()`, `increaseLiquidity()`, `decreaseLiquidity()`, `collect()`, `burn()`, `positions()`
+- **ISwapRouter**: `exactInputSingle(WETH ↔ USDC, 0.05% fee)` — para balancear el par en cada operación
+- **IUniswapV3Pool**: `slot0()` — lee precio actual (sqrtPriceX96) para calcular valor de la posición
+
+### Variables de Estado
+
+```solidity
+// Inmutables (calculados en constructor)
+address public immutable manager;                    // StrategyManager autorizado
+address private immutable asset_address;             // WETH
+INonfungiblePositionManager private immutable position_manager;
+ISwapRouter private immutable swap_router;
+IUniswapV3Pool private immutable pool;               // WETH/USDC 0.05% pool
+address private immutable weth;
+address private immutable usdc;                      // 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+address private immutable token0;                    // El menor en dirección (USDC en WETH/USDC)
+address private immutable token1;                    // El mayor en dirección (WETH en WETH/USDC)
+bool private immutable weth_is_token0;               // false en WETH/USDC (USDC < WETH en addr)
+int24 public immutable lower_tick;                   // tick_actual - 960
+int24 public immutable upper_tick;                   // tick_actual + 960
+
+// Estado mutable
+uint256 public token_id;                             // ID del NFT activo (0 = sin posición)
+
+// Constantes
+uint24 private constant POOL_FEE = 500;              // 0.05% fee tier del pool
+int24 private constant TICK_SPACING = 10;            // Tick spacing del pool 0.05%
+int24 private constant TICK_RANGE = 960;             // ±960 ticks ≈ ±10% de precio
+uint256 private constant UNISWAP_V3_APY = 1400;     // 14% (estimado histórico)
+```
+
+**Addresses mainnet:**
+- Pool WETH/USDC 0.05%: `0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640`
+- NonfungiblePositionManager: `0xC36442b4a4522E871399CD717aBDD847Ab11FE88`
+- SwapRouter: `0xE592427A0AEce92De3Edee1F18E0157C05861564`
+- USDC: `0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48`
+
+### Funciones Principales
+
+#### deposit(uint256 assets) → uint256 shares
+
+WETH → swap 50% a USDC → mint/increaseLiquidity NFT.
+
+**Precondición**: WETH debe estar en la estrategia (transferido por manager).
+
+**Flujo:**
+1. Swap 50% del WETH a USDC: `exactInputSingle(WETH → USDC, 0.05% fee)`
+2. Si `token_id == 0` (primera vez):
+   - `position_manager.mint(token0, token1, 500, lower_tick, upper_tick, amounts...)` → guarda `token_id`
+3. Si `token_id > 0` (posición existente):
+   - `position_manager.increaseLiquidity(token_id, amounts...)`
+4. Emite `Deposited(msg.sender, assets, assets)`
+
+**Modificadores**: `onlyManager`
+
+---
+
+#### withdraw(uint256 assets) → uint256 actual_withdrawn
+
+decreaseLiquidity → collect → swap USDC → WETH → si vacío, burn NFT.
+
+**Flujo:**
+1. Obtiene `total_liquidity` de la posición via `positions(token_id)`
+2. Calcula `liquidity_to_remove` proporcional: `total_liquidity * assets / _totalAssets()`
+3. `position_manager.decreaseLiquidity(token_id, liquidity_to_remove, ...)` — tokens pasan a "owed"
+4. `position_manager.collect(token_id, max_amounts)` → recibe WETH + USDC
+5. Si `remaining_liquidity == 0`: `position_manager.burn(token_id)`, `token_id = 0`
+6. Swap USDC → WETH: `exactInputSingle(USDC → WETH, 0.05% fee)`
+7. Transfiere todo el WETH al manager
+8. Emite `Withdrawn(msg.sender, actual_withdrawn, assets)`
+
+**Modificadores**: `onlyManager`
+
+---
+
+#### harvest() → uint256 profit
+
+collect fees (WETH+USDC) → swap USDC → WETH → registra profit → reinvierte.
+
+**Flujo:**
+1. Si `token_id == 0` → return 0 (sin posición activa)
+2. `position_manager.collect(token_id, max_amounts)` → recoge fees acumulados (WETH + USDC)
+3. Si collected == 0 → return 0
+4. Swap `USDC → WETH`: `exactInputSingle(USDC → WETH, 0.05% fee)` → todo en WETH
+5. Registra `profit = total_weth`
+6. Reinvierte: swap 50% WETH → USDC → `position_manager.increaseLiquidity(token_id, ...)`
+7. Emite `Harvested(msg.sender, profit)`
+
+**Modificadores**: `onlyManager`
+
+---
+
+#### totalAssets() → uint256
+
+Calcula valor WETH de la posición NFT usando precio actual del pool.
+
+**Internamente (_totalAssets):**
+1. Si `token_id == 0` → return 0
+2. Obtiene `liquidity`, `tokens_owed0`, `tokens_owed1` de `positions(token_id)`
+3. Lee `sqrtPriceX96` de `pool.slot0()`
+4. Usa `LiquidityAmounts.getAmountsForLiquidity()` para convertir liquidez a amount0/amount1
+5. Suma fees pendientes (`tokens_owed0`, `tokens_owed1`)
+6. Convierte USDC a WETH usando `sqrtPriceX96` y `FullMath.mulDiv()` para evitar overflow
+7. Retorna `weth_amount + weth_from_usdc`
+
+**Nota**: Las bibliotecas `TickMath`, `LiquidityAmounts` y `FullMath` son ports de las librerías de Uniswap V3 usadas internamente por el protocolo.
+
+---
+
+#### apy() → uint256
+
+Retorna APY hardcodeado: 1400 bp (14%). Altamente variable según volumen del pool WETH/USDC.
+
+---
+
+### Errores Custom
+
+```solidity
+error UniswapV3Strategy__OnlyManager();
+error UniswapV3Strategy__ZeroAmount();
+error UniswapV3Strategy__MintFailed();
+error UniswapV3Strategy__SwapFailed();
+error UniswapV3Strategy__InsufficientLiquidity();
 ```
 
 ---
@@ -1054,42 +1293,7 @@ event Harvested(address indexed caller, uint256 profit);
 
 ### Nota Importante
 
-La interfaz incluye `harvest()` como función requerida — todas las estrategias de VynX V1 deben soportar cosecha de rewards. El `actual_withdrawn` en `withdraw()` permite contabilizar el rounding de protocolos externos.
-
----
-
-## ICometMarket.sol & ICometRewards.sol
-
-**Ubicación**: `src/interfaces/compound/ICometMarket.sol` y `src/interfaces/compound/ICometRewards.sol`
-
-### Propósito
-
-Interfaces simplificadas de Compound v3 con solo las funciones necesarias para CompoundStrategy.
-
-### Decisión de Diseño
-
-**¿Por qué interfaces custom en lugar de librerías oficiales?**
-- Compound v3: Librerías oficiales tienen dependencias complejas e indexadas
-- Solo necesitamos las funciones que usamos
-- Aave: Usamos librerías oficiales porque están limpias y bien estructuradas
-- Compound: Interfaz custom es más pragmática (trade-off: inconsistencia vs simplicidad)
-
-### ICometMarket — Funciones
-
-```solidity
-function supply(address asset, uint256 amount) external;
-function withdraw(address asset, uint256 amount) external;
-function balanceOf(address account) external view returns (uint256 balance);
-function getSupplyRate(uint256 utilization) external view returns (uint64 rate);
-function getUtilization() external view returns (uint256 utilization);
-```
-
-### ICometRewards — Funciones
-
-```solidity
-function claim(address comet, address src, bool shouldAccrue) external;
-function getRewardOwed(address comet, address account) external returns (RewardOwed memory);
-```
+La interfaz incluye `harvest()` como función requerida — todas las estrategias de VynX V2 implementan este método. En LidoStrategy, `harvest()` retorna siempre 0 (el yield es auto-compuesto). El `actual_withdrawn` en `withdraw()` permite contabilizar el rounding de protocolos externos.
 
 ---
 
@@ -1317,4 +1521,4 @@ function zapWithdrawERC20(uint256 shares, address token_out, uint24 pool_fee, ui
 
 ---
 
-**Siguiente lectura**: [FLOWS.md](FLOWS.md) - Flujos de usuario paso a paso
+**Siguiente lectura**: [FLOWS.md](FLOWS.md) — Flujos de usuario paso a paso con las 4 estrategias V2
