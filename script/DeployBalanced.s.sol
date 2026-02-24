@@ -40,7 +40,14 @@ contract DeployBalanced is Script {
     address constant UNI_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
 
     function run() external {
-        address deployer = msg.sender;
+        // Lee treasury y founder desde variables de entorno
+        address treasury = vm.envAddress("TREASURY_ADDRESS");
+        address founder = vm.envAddress("FOUNDER_ADDRESS");
+
+        // Validacion explicita: revierte con mensaje claro si no estan seteadas
+        require(treasury != address(0), "DeployBalanced: TREASURY_ADDRESS no seteada");
+        require(founder != address(0), "DeployBalanced: FOUNDER_ADDRESS no seteada");
+
         vm.startBroadcast();
 
         // 1. Despliega StrategyManager (necesita existir antes que las estrategias)
@@ -93,8 +100,8 @@ contract DeployBalanced is Script {
         Vault vault = new Vault(
             WETH,
             address(manager),
-            deployer, // treasury = deployer para el script inicial
-            deployer, // founder  = deployer para el script inicial
+            treasury,
+            founder,
             IVault.TierConfig({
                 idle_threshold: 8 ether,
                 min_profit_for_harvest: 0.08 ether,

@@ -38,7 +38,14 @@ contract DeployAggressive is Script {
     address constant WETH_USDC_POOL = 0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640;
 
     function run() external {
-        address deployer = msg.sender;
+        // Lee treasury y founder desde variables de entorno
+        address treasury = vm.envAddress("TREASURY_ADDRESS");
+        address founder = vm.envAddress("FOUNDER_ADDRESS");
+
+        // Validacion explicita: revierte con mensaje claro si no estan seteadas
+        require(treasury != address(0), "DeployAggressive: TREASURY_ADDRESS no seteada");
+        require(founder != address(0), "DeployAggressive: FOUNDER_ADDRESS no seteada");
+
         vm.startBroadcast();
 
         // 1. Despliega StrategyManager (necesita existir antes que las estrategias)
@@ -72,8 +79,8 @@ contract DeployAggressive is Script {
         Vault vault = new Vault(
             WETH,
             address(manager),
-            deployer, // treasury = deployer para el script inicial
-            deployer, // founder  = deployer para el script inicial
+            treasury,
+            founder,
             IVault.TierConfig({
                 idle_threshold: 12 ether,
                 min_profit_for_harvest: 0.12 ether,

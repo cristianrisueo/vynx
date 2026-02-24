@@ -198,30 +198,60 @@ Verifica que el Router nunca retiene WETH ni ETH entre transacciones.
 | Router.sol            | 98.36%     | 80.95%     | 28.57%     | 100.00%    |
 | **Total**             | **85.42%** | **82.83%** | **50.00%** | **98.23%** |
 
+## Variables de Entorno
+
+Crea un fichero `.env` en la raiz del proyecto con las siguientes variables:
+
+| Variable            | Descripcion                                                        |
+| ------------------- | ------------------------------------------------------------------ |
+| `MAINNET_RPC_URL`   | RPC de Ethereum Mainnet (Alchemy, Infura, etc.)                    |
+| `PRIVATE_KEY`       | Clave privada del deployer (sin el prefijo `0x`) para `--broadcast`|
+| `ETHERSCAN_API_KEY` | API key de Etherscan para verificacion de contratos                |
+| `TREASURY_ADDRESS`  | Address que recibe el 80% de las performance fees                  |
+| `FOUNDER_ADDRESS`   | Address que recibe el 20% de las performance fees                  |
+
+> **IMPORTANTE**: `TREASURY_ADDRESS` y `FOUNDER_ADDRESS` deben setearse antes de cualquier
+> broadcast a mainnet. Los scripts de deploy revertiran con un mensaje claro si alguna de
+> las dos variables no esta presente o es `address(0)`.
+> `PRIVATE_KEY` solo es necesaria para el paso de broadcast (`--broadcast`); el dry-run
+> no la requiere.
+
 ## Deployment
 
 El protocolo se despliega en dos configuraciones independientes segun el perfil de riesgo deseado.
+Sigue siempre el proceso de dos pasos: primero un dry-run para verificar la simulacion,
+luego el broadcast real solo si el dry-run fue exitoso.
+
+### Tier Balanced: Lido + Aave wstETH + Curve
 
 ```bash
-# Configurar private key del deployer
-export PRIVATE_KEY="0x..."
-export MAINNET_RPC_URL="https://eth-mainnet.g.alchemy.com/v2/<API_KEY>"
+# Paso 1: dry run — verifica que todo compila y simula correctamente
+forge script script/DeployBalanced.s.sol \
+  --rpc-url $MAINNET_RPC_URL
 
-# --- Tier Balanced: Lido + Aave wstETH + Curve ---
+# Paso 2: broadcast real solo si el dry run fue exitoso
+forge script script/DeployBalanced.s.sol \
+  --rpc-url $MAINNET_RPC_URL \
+  --private-key $PRIVATE_KEY \
+  --broadcast \
+  --verify \
+  --etherscan-api-key $ETHERSCAN_API_KEY
+```
 
-# Dry-run (simula sin ejecutar)
-forge script script/DeployBalanced.s.sol --rpc-url $MAINNET_RPC_URL -vvv
+### Tier Aggressive: Curve + Uniswap V3
 
-# Deploy real
-forge script script/DeployBalanced.s.sol --rpc-url $MAINNET_RPC_URL --broadcast --verify
+```bash
+# Paso 1: dry run — verifica que todo compila y simula correctamente
+forge script script/DeployAggressive.s.sol \
+  --rpc-url $MAINNET_RPC_URL
 
-# --- Tier Aggressive: Curve + Uniswap V3 ---
-
-# Dry-run (simula sin ejecutar)
-forge script script/DeployAggressive.s.sol --rpc-url $MAINNET_RPC_URL -vvv
-
-# Deploy real
-forge script script/DeployAggressive.s.sol --rpc-url $MAINNET_RPC_URL --broadcast --verify
+# Paso 2: broadcast real solo si el dry run fue exitoso
+forge script script/DeployAggressive.s.sol \
+  --rpc-url $MAINNET_RPC_URL \
+  --private-key $PRIVATE_KEY \
+  --broadcast \
+  --verify \
+  --etherscan-api-key $ETHERSCAN_API_KEY
 ```
 
 ## Guia de Seleccion de Tier
@@ -320,6 +350,14 @@ El protocolo confia en:
 ## Licencia
 
 MIT License - Ver [LICENSE](LICENSE) para mas detalles
+
+## Documentacion Interactiva
+
+```bash
+forge doc --serve --port 4000
+```
+
+Genera y sirve la documentacion NatSpec del proyecto en `http://localhost:4000`.
 
 ---
 
