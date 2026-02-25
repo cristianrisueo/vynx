@@ -52,6 +52,29 @@ forge install
 forge build
 ```
 
+## Deployment
+
+VynX V2 está deployado y verificado en **Ethereum Mainnet**.
+
+### Balanced Tier
+
+| Contrato | Address |
+|---|---|
+| StrategyManager | [`0xA0d462b84C2431463bDACDC2C5bc3172FC927B0B`](https://etherscan.io/address/0xa0d462b84c2431463bdacdc2c5bc3172fc927b0b) |
+| Vault (vxWETH) | [`0x9D002dF2A5B632C0D8022a4738C1fa7465d88444`](https://etherscan.io/address/0x9d002df2a5b632c0d8022a4738c1fa7465d88444) |
+| LidoStrategy | [`0xf8d1E54A07A47BB03833493EAEB7FE7432B53FCB`](https://etherscan.io/address/0xf8d1e54a07a47bb03833493eaeb7fe7432b53fcb) |
+| AaveStrategy | [`0x8135Ed49ffFeEF4a1Bb5909c5bA96EEe9D4ed32A`](https://etherscan.io/address/0x8135ed49fffeef4a1bb5909c5ba96eee9d4ed32a) |
+| CurveStrategy | [`0xF0C57C9c1974a14602074D85cfB1Bc251B67Dc00`](https://etherscan.io/address/0xf0c57c9c1974a14602074d85cfb1bc251b67dc00) |
+
+### Aggressive Tier
+
+| Contrato | Address |
+|---|---|
+| StrategyManager | [`0xcCa54463BD2aEDF1773E9c3f45c6a954Aa9D9706`](https://etherscan.io/address/0xcca54463bd2aedf1773e9c3f45c6a954aa9d9706) |
+| Vault (vxWETH) | [`0xA8cA9d84e35ac8F5af6F1D91fe4bE1C0BAf44296`](https://etherscan.io/address/0xa8ca9d84e35ac8f5af6f1d91fe4be1c0baf44296) |
+| CurveStrategy | [`0x312510B911fA47D55c9f1a055B1987D51853A7DE`](https://etherscan.io/address/0x312510b911fa47d55c9f1a055b1987d51853a7de) |
+| UniswapV3Strategy | [`0x653D9C2dF3A32B872aEa4E3b4e7436577C5eEB62`](https://etherscan.io/address/0x653d9c2df3a32b872aea4e3b4e7436577c5eeb62) |
+
 ## Uso Rapido
 
 ### Deposito directo (WETH)
