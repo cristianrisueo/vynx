@@ -3,6 +3,7 @@
 Este documento proporciona documentación técnica detallada de cada contrato del protocolo VynX V2, incluyendo variables de estado, funciones principales, eventos y modificadores.
 
 **Contratos documentados:**
+
 - [Vault.sol](#vaultsol) — ERC4626 vault con idle buffer y fees
 - [StrategyManager.sol](#strategymanagersol) — Motor de allocation y rebalancing
 - [LidoStrategy.sol](#lidostrategysol) — Lido staking: WETH → wstETH (auto-compound)
@@ -86,6 +87,7 @@ uint256 public max_tvl = 1000 ether;                 // TVL máximo permitido
 Deposita WETH en el vault y mintea shares al usuario.
 
 **Flujo:**
+
 1. Verifica `assets >= min_deposit` (0.01 ETH)
 2. Verifica `totalAssets() + assets <= max_tvl` (circuit breaker)
 3. Calcula shares usando `previewDeposit(assets)` (antes de cambiar estado)
@@ -105,6 +107,7 @@ Deposita WETH en el vault y mintea shares al usuario.
 Mintea cantidad exacta de shares depositando los assets necesarios.
 
 **Flujo:**
+
 1. Verifica `shares > 0`
 2. Calcula assets necesarios usando `previewMint(shares)`
 3. Similar a `deposit()` a partir de aquí
@@ -120,6 +123,7 @@ Mintea cantidad exacta de shares depositando los assets necesarios.
 Retira cantidad exacta de WETH quemando shares necesarias.
 
 **Flujo:**
+
 1. Calcula shares a quemar usando `previewWithdraw(assets)`
 2. Verifica allowance si `msg.sender != owner` (`_spendAllowance`)
 3. Quema shares del owner (`_burn`) - **CEI pattern**
@@ -142,6 +146,7 @@ Retira cantidad exacta de WETH quemando shares necesarias.
 Quema shares exactas y retira WETH proporcional.
 
 **Flujo:**
+
 1. Calcula assets netos usando `previewRedeem(shares)`
 2. Similar a `withdraw()` a partir de aquí
 
@@ -158,6 +163,7 @@ Cosecha rewards de todas las estrategias y distribuye performance fees.
 **Precondiciones**: Vault no pausado. Cualquiera puede llamar.
 
 **Flujo:**
+
 1. Llama `IStrategyManager(strategy_manager).harvest()` → obtiene `profit`
 2. Si `profit < min_profit_for_harvest` (0.08 ETH Balanced / 0.12 ETH Aggressive) → return 0 (no distribuye)
 3. Si caller no es keeper oficial:
@@ -176,6 +182,7 @@ Cosecha rewards de todas las estrategias y distribuye performance fees.
 **Eventos**: `Harvested(profit, perf_fee, timestamp)`, `PerformanceFeeDistributed(treasury_amount, founder_amount)`
 
 **Ejemplo numérico:**
+
 ```solidity
 // profit = 5.5 WETH (de harvest de estrategias)
 // Caller es keeper externo (no oficial)
@@ -200,6 +207,7 @@ function totalAssets() public view returns (uint256) {
 ```
 
 **Incluye:**
+
 - `idle_buffer`: WETH físico en el vault (pendiente de invertir)
 - `strategy_manager.totalAssets()`: Suma de WETH en todas las estrategias (incluye yield)
 
@@ -228,27 +236,30 @@ Retorna máximo de shares minteables antes de alcanzar max_tvl. Retorna 0 si pau
 
 ### Funciones Internas
 
-#### _allocateIdle()
+#### \_allocateIdle()
 
 Transfiere idle buffer al StrategyManager para inversión.
 
 **Flujo:**
+
 1. Guarda `to_allocate = idle_buffer`
 2. Resetea `idle_buffer = 0`
 3. Transfiere WETH al manager (`safeTransfer`)
 4. Llama `manager.allocate(to_allocate)`
 
 **Llamada desde:**
+
 - `deposit()` / `mint()` si `idle_buffer >= idle_threshold`
 - `allocateIdle()` (externa, cualquiera puede llamar si idle >= threshold)
 
 ---
 
-#### _withdraw(address caller, address receiver, address owner, uint256 assets, uint256 shares)
+#### \_withdraw(address caller, address receiver, address owner, uint256 assets, uint256 shares)
 
-Override de ERC4626._withdraw con lógica custom de retiro.
+Override de ERC4626.\_withdraw con lógica custom de retiro.
 
 **Flujo:**
+
 1. Reduce allowance si `caller != owner`
 2. Quema shares del owner (CEI pattern)
 3. Calcula `from_idle = min(idle_buffer, assets)`
@@ -261,11 +272,12 @@ Override de ERC4626._withdraw con lógica custom de retiro.
 
 ---
 
-#### _distributePerformanceFee(uint256 perf_fee)
+#### \_distributePerformanceFee(uint256 perf_fee)
 
 Distribuye performance fees entre treasury y founder.
 
 **Flujo:**
+
 1. `treasury_amount = (perf_fee * treasury_split) / BASIS_POINTS`
 2. `founder_amount = (perf_fee * founder_split) / BASIS_POINTS`
 3. Treasury: convierte `treasury_amount` a shares → `_mint(treasury_address, treasury_shares)`
@@ -317,6 +329,7 @@ Reconcilia `idle_buffer` con el balance real de WETH del contrato.
 **Cuándo usar:** Después de ejecutar `manager.emergencyExit()`, que transfiere WETH directamente al vault sin pasar por `deposit()`, dejando `idle_buffer` desincronizado.
 
 **Flujo:**
+
 1. Guarda valor anterior: `old_buffer = idle_buffer`
 2. Lee balance real: `real_balance = IERC20(asset()).balanceOf(address(this))`
 3. Actualiza: `idle_buffer = real_balance`
@@ -327,6 +340,7 @@ Reconcilia `idle_buffer` con el balance real de WETH del contrato.
 **Eventos**: `IdleBufferSynced(old_buffer, new_buffer)`
 
 **Secuencia completa de emergencia:**
+
 ```solidity
 vault.pause();             // 1. Bloquea nuevos depósitos
 manager.emergencyExit();   // 2. Drena estrategias al vault
@@ -428,6 +442,7 @@ Distribuye WETH entre estrategias según target allocation.
 **Precondición**: Vault debe transferir WETH al manager antes de llamar.
 
 **Flujo:**
+
 1. Verifica `assets > 0` y `strategies.length > 0`
 2. Llama `_calculateTargetAllocation()`:
    - Obtiene APY de cada estrategia
@@ -444,6 +459,7 @@ Distribuye WETH entre estrategias según target allocation.
 **Eventos**: `Allocated(strategy, assets)` por cada estrategia
 
 **Ejemplo (Tier Balanced con 3 estrategias):**
+
 ```solidity
 // Si recibe 100 WETH y targets son [3000, 4000, 3000] (30%, 40%, 30%):
 // - LidoStrategy recibe 30 WETH
@@ -458,6 +474,7 @@ Distribuye WETH entre estrategias según target allocation.
 Retira WETH de estrategias proporcionalmente y transfiere al receiver.
 
 **Flujo:**
+
 1. Verifica `assets > 0`
 2. Obtiene `total_assets = totalAssets()`
 3. Si `total_assets == 0`, retorna (edge case)
@@ -474,6 +491,7 @@ Retira WETH de estrategias proporcionalmente y transfiere al receiver.
 **Nota**: Retira proporcionalmente para mantener ratios. NO recalcula target allocation (ahorro de gas). Usa `actual_withdrawn` para contabilizar rounding de protocolos externos.
 
 **Ejemplo (Tier Balanced con 3 estrategias):**
+
 ```solidity
 // Estado: Lido 40 WETH, Aave 40 WETH, Curve 20 WETH (total 100 WETH)
 // Usuario retira 50 WETH
@@ -490,6 +508,7 @@ Retira WETH de estrategias proporcionalmente y transfiere al receiver.
 Cosecha rewards de todas las estrategias con fail-safe.
 
 **Flujo:**
+
 1. Para cada estrategia:
    - `try strategy.harvest()` → acumula profit si éxito
    - `catch` → emite `HarvestFailed(strategy, reason)` y continúa
@@ -510,6 +529,7 @@ Ajusta cada estrategia a su target allocation moviendo solo deltas necesarios.
 **Precondición**: `shouldRebalance()` debe ser true (revierte si no).
 
 **Flujo:**
+
 1. Verifica rentabilidad con `shouldRebalance()`
 2. Recalcula targets frescos: `_calculateTargetAllocation()`
 3. Obtiene `total_tvl = totalAssets()`
@@ -531,6 +551,7 @@ Ajusta cada estrategia a su target allocation moviendo solo deltas necesarios.
 **Eventos**: `Rebalanced(from_strategy, to_strategy, assets)`
 
 **Ejemplo (Tier Aggressive: Curve 6% vs UniswapV3 14%):**
+
 ```solidity
 // Estado actual: Curve 50 WETH (6% APY), UniswapV3 50 WETH (14% APY)
 // Targets recalculados: Curve ~30% (30 WETH), UniswapV3 ~70% (70 WETH)
@@ -548,6 +569,7 @@ Ajusta cada estrategia a su target allocation moviendo solo deltas necesarios.
 Verifica si un rebalance es rentable comparando diferencia de APY entre estrategias.
 
 **Flujo:**
+
 1. Verifica `strategies.length >= 2`
 2. Verifica `totalAssets() >= min_tvl_for_rebalance` (10 ETH)
 3. Calcula `max_apy` y `min_apy` entre todas las estrategias
@@ -556,6 +578,7 @@ Verifica si un rebalance es rentable comparando diferencia de APY entre estrateg
 **Nota**: Es función `view` (no modifica estado), puede ser llamada por bots/frontends.
 
 **Ejemplo de cálculo (Tier Aggressive):**
+
 ```solidity
 // Curve APY: 6% (600 bp), UniswapV3 APY: 14% (1400 bp)
 // Diferencia: 1400 - 600 = 800 bp
@@ -572,6 +595,7 @@ Verifica si un rebalance es rentable comparando diferencia de APY entre estrateg
 Agrega nueva estrategia al manager.
 
 **Flujo:**
+
 1. Verifica que estrategia no exista (`!is_strategy[strategy]`)
 2. Verifica `strategies.length < MAX_STRATEGIES` (max 10)
 3. Verifica `strategy.asset() == asset` (mismo underlying)
@@ -592,6 +616,7 @@ Remueve estrategia del manager por índice.
 **Precondición**: Estrategia debe tener balance cero antes de remover.
 
 **Flujo:**
+
 1. Verifica que estrategia en `index` tenga `totalAssets() == 0`
 2. Elimina target: `delete target_allocation[strategies[index]]`
 3. Swap & pop: `strategies[index] = strategies[length-1]; strategies.pop()`
@@ -611,6 +636,7 @@ Drena todas las estrategias activas y transfiere los assets al vault en caso de 
 **Precondición**: Solo callable por el owner del manager. Sin timelock.
 
 **Flujo:**
+
 1. Inicializa acumuladores: `total_rescued = 0`, `strategies_drained = 0`
 2. Para cada estrategia activa:
    - Obtiene `strategy_balance = strategy.totalAssets()`
@@ -630,6 +656,7 @@ Drena todas las estrategias activas y transfiere los assets al vault en caso de 
 **Nota sobre dust:** Tras el drenaje, las estrategias pueden retener 1-2 wei de dust por rounding en conversiones (ej: wstETH/stETH). Esto es esperado y no representa pérdida de fondos.
 
 **Secuencia obligatoria post-exit:**
+
 ```solidity
 vault.pause();             // 1. Detiene nuevos depósitos
 manager.emergencyExit();   // 2. Drena estrategias
@@ -640,11 +667,12 @@ vault.syncIdleBuffer();    // 3. Reconcilia idle_buffer con balance real
 
 ### Funciones Internas
 
-#### _computeTargets() → uint256[]
+#### \_computeTargets() → uint256[]
 
 Calcula targets de allocation basados en APY con caps.
 
 **Algoritmo:**
+
 1. Si no hay estrategias: retorna array vacío
 2. Suma APYs de todas las estrategias: `total_apy`
 3. Si `total_apy == 0`: distribuye equitativamente (`BASIS_POINTS / strategies.length`)
@@ -663,11 +691,12 @@ Calcula targets de allocation basados en APY con caps.
 
 ---
 
-#### _calculateTargetAllocation()
+#### \_calculateTargetAllocation()
 
 Calcula targets y escribe a storage.
 
 **Flujo:**
+
 1. Si no hay estrategias: retorna
 2. Llama `_computeTargets()` para obtener array de targets
 3. Escribe a storage: `target_allocation[strategies[i]] = computed[i]`
@@ -810,6 +839,7 @@ Convierte WETH a wstETH vía Lido y lo retiene.
 **Precondición**: WETH debe estar en la estrategia (transferido por manager).
 
 **Flujo:**
+
 1. `IWETH(asset_address).withdraw(assets)` — unwrap WETH a ETH
 2. `ILido(lido).receive{value: assets}()` — submit ETH a Lido → recibe stETH
 3. `IWstETH(wsteth).wrap(steth_balance)` — convierte stETH a wstETH
@@ -824,6 +854,7 @@ Convierte WETH a wstETH vía Lido y lo retiene.
 Swap wstETH → WETH via Uniswap V3 y transfiere al manager.
 
 **Flujo:**
+
 1. Calcula `wsteth_to_sell`: proporción de wstETH correspondiente a `assets` WETH
 2. Swap: `uniswap_router.exactInputSingle(wstETH → WETH, 0.05% fee, 99% min out)`
 3. Transfiere WETH al manager
@@ -941,6 +972,7 @@ WETH → ETH → stETH → wstETH → Aave supply.
 **Precondición**: WETH debe estar en la estrategia (transferido por manager).
 
 **Flujo:**
+
 1. `IWETH.withdraw(assets)` — unwrap a ETH
 2. `ILido.receive{value: assets}()` — ETH → stETH
 3. `IWstETH.wrap(steth_balance)` — stETH → wstETH
@@ -956,6 +988,7 @@ WETH → ETH → stETH → wstETH → Aave supply.
 aWstETH → wstETH → stETH → ETH (Curve) → WETH.
 
 **Flujo:**
+
 1. Calcula `wsteth_to_withdraw` proporcional a `assets`
 2. `aave_pool.withdraw(wst_eth, wsteth_to_withdraw, address(this))` — aWstETH → wstETH
 3. `IWstETH.unwrap(wsteth_received)` — wstETH → stETH
@@ -973,6 +1006,7 @@ aWstETH → wstETH → stETH → ETH (Curve) → WETH.
 Claimea AAVE rewards → swap WETH → reinvierte como wstETH en Aave.
 
 **Flujo:**
+
 1. `rewards_controller.claimAllRewards([a_wst_eth])` → recibe AAVE tokens
 2. Si no hay rewards → return 0
 3. Swap: `uniswap_router.exactInputSingle(AAVE → WETH, 0.3% fee, 1% max slippage)`
@@ -1003,11 +1037,13 @@ function totalAssets() external view returns (uint256) {
 APY dinámico de Aave para wstETH. Lee `liquidityRate` on-chain.
 
 **Flujo:**
+
 1. `aave_pool.getReserveData(wst_eth)` → `DataTypes.ReserveData`
 2. Extrae `liquidityRate` (en RAY = 1e27)
 3. Convierte: `apy = liquidityRate / 1e23` (RAY → basis points)
 
 **Ejemplo:**
+
 ```solidity
 // liquidityRate wstETH = 35000000000000000000000000 (RAY) ≈ 3.5%
 // apy = 35000000000000000000000000 / 1e23 = 350 basis points
@@ -1096,6 +1132,7 @@ WETH → ETH → stETH → add_liquidity → LP → gauge stake.
 **Precondición**: WETH debe estar en la estrategia (transferido por manager).
 
 **Flujo:**
+
 1. `IWETH.withdraw(assets)` — unwrap WETH a ETH
 2. Divide ETH en dos mitades: 50% se envía a Lido, 50% se usa como ETH directo
 3. `ILido.receive{value: half}()` — ETH → stETH
@@ -1112,6 +1149,7 @@ WETH → ETH → stETH → add_liquidity → LP → gauge stake.
 gauge.withdraw → remove_liquidity_one_coin → ETH → WETH.
 
 **Flujo:**
+
 1. Calcula `lp_to_withdraw` proporcional a `assets` / `totalAssets()`
 2. `gauge.withdraw(lp_to_withdraw)` — desestakea LP del gauge
 3. `pool.remove_liquidity_one_coin(lp_to_withdraw, 0, min_eth_out)` — LP → ETH (índice 0)
@@ -1128,6 +1166,7 @@ gauge.withdraw → remove_liquidity_one_coin → ETH → WETH.
 Claimea CRV rewards → swap WETH → reinvierte como LP.
 
 **Flujo:**
+
 1. `gauge.claim_rewards()` → recibe CRV tokens
 2. Si balance CRV == 0 → return 0
 3. Swap: `uniswap_router.exactInputSingle(CRV → WETH, 0.3% fee, sin min_out)`
@@ -1233,6 +1272,7 @@ uint256 private constant UNISWAP_V3_APY = 1400;     // 14% (estimado histórico)
 ```
 
 **Addresses mainnet:**
+
 - Pool WETH/USDC 0.05%: `0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640`
 - NonfungiblePositionManager: `0xC36442b4a4522E871399CD717aBDD847Ab11FE88`
 - SwapRouter: `0xE592427A0AEce92De3Edee1F18E0157C05861564`
@@ -1247,6 +1287,7 @@ WETH → swap 50% a USDC → mint/increaseLiquidity NFT.
 **Precondición**: WETH debe estar en la estrategia (transferido por manager).
 
 **Flujo:**
+
 1. Swap 50% del WETH a USDC: `exactInputSingle(WETH → USDC, 0.05% fee)`
 2. Si `token_id == 0` (primera vez):
    - `position_manager.mint(token0, token1, 500, lower_tick, upper_tick, amounts...)` → guarda `token_id`
@@ -1263,6 +1304,7 @@ WETH → swap 50% a USDC → mint/increaseLiquidity NFT.
 decreaseLiquidity → collect → swap USDC → WETH → si vacío, burn NFT.
 
 **Flujo:**
+
 1. Obtiene `total_liquidity` de la posición via `positions(token_id)`
 2. Calcula `liquidity_to_remove` proporcional: `total_liquidity * assets / _totalAssets()`
 3. `position_manager.decreaseLiquidity(token_id, liquidity_to_remove, ...)` — tokens pasan a "owed"
@@ -1281,6 +1323,7 @@ decreaseLiquidity → collect → swap USDC → WETH → si vacío, burn NFT.
 collect fees (WETH+USDC) → swap USDC → WETH → registra profit → reinvierte.
 
 **Flujo:**
+
 1. Si `token_id == 0` → return 0 (sin posición activa)
 2. `position_manager.collect(token_id, max_amounts)` → recoge fees acumulados (WETH + USDC)
 3. Si collected == 0 → return 0
@@ -1297,7 +1340,8 @@ collect fees (WETH+USDC) → swap USDC → WETH → registra profit → reinvier
 
 Calcula valor WETH de la posición NFT usando precio actual del pool.
 
-**Internamente (_totalAssets):**
+**Internamente (\_totalAssets):**
+
 1. Si `token_id == 0` → return 0
 2. Obtiene `liquidity`, `tokens_owed0`, `tokens_owed1` de `positions(token_id)`
 3. Lee `sqrtPriceX96` de `pool.slot0()`
@@ -1401,6 +1445,7 @@ constructor(address _weth, address _vault, address _swap_router)
 ```
 
 **Flujo:**
+
 1. Valida que ninguna dirección sea `address(0)` (revierte con `Router__ZeroAddress`)
 2. Establece las 3 variables inmutables
 3. Aprueba al vault transfer de WETH ilimitado: `IERC20(weth).forceApprove(vault, type(uint256).max)`
@@ -1412,6 +1457,7 @@ constructor(address _weth, address _vault, address _swap_router)
 Deposita ETH nativo en el vault (wrap → deposit).
 
 **Flujo:**
+
 1. Verifica `msg.value > 0`
 2. Wrappea ETH a WETH: `_wrapETH(msg.value)`
 3. Deposita WETH en vault: `vault.deposit(msg.value, msg.sender)` → shares al usuario
@@ -1423,6 +1469,7 @@ Deposita ETH nativo en el vault (wrap → deposit).
 Deposita ERC20 en el vault (swap → deposit).
 
 **Flujo:**
+
 1. Valida: `token_in != address(0)`, `token_in != weth`, `amount_in > 0`
 2. Transfiere `token_in` del usuario al Router
 3. Swapea `token_in → WETH`: `_swapToWETH(token_in, amount_in, pool_fee, min_weth_out)`
@@ -1435,6 +1482,7 @@ Deposita ERC20 en el vault (swap → deposit).
 Retira shares del vault y recibe ETH nativo (redeem → unwrap).
 
 **Flujo:**
+
 1. Valida `shares > 0`
 2. Transfiere shares del usuario al Router (requiere aprobación previa)
 3. Redime shares: `vault.redeem(shares, address(this), address(this))` → WETH al Router
@@ -1448,6 +1496,7 @@ Retira shares del vault y recibe ETH nativo (redeem → unwrap).
 Retira shares del vault y recibe ERC20 (redeem → swap).
 
 **Flujo:**
+
 1. Valida: `token_out != address(0)`, `token_out != weth`, `shares > 0`
 2. Transfiere shares del usuario al Router
 3. Redime shares → WETH al Router
@@ -1458,14 +1507,14 @@ Retira shares del vault y recibe ERC20 (redeem → swap).
 
 ### Funciones Internas
 
-#### _wrapETH(uint256 amount)
+#### \_wrapETH(uint256 amount)
 
 ```solidity
 (bool success,) = weth.call{value: amount}(abi.encodeWithSignature("deposit()"));
 if (!success) revert Router__ETHWrapFailed();
 ```
 
-#### _unwrapWETH(uint256 amount) → uint256 eth_out
+#### \_unwrapWETH(uint256 amount) → uint256 eth_out
 
 ```solidity
 (bool success,) = weth.call(abi.encodeWithSignature("withdraw(uint256)", amount));
@@ -1473,7 +1522,7 @@ if (!success) revert Router__ETHUnwrapFailed();
 return amount;
 ```
 
-#### _swapToWETH(token_in, amount_in, pool_fee, min_weth_out) → uint256 weth_out
+#### \_swapToWETH(token_in, amount_in, pool_fee, min_weth_out) → uint256 weth_out
 
 ```solidity
 IERC20(token_in).forceApprove(swap_router, amount_in);
@@ -1490,7 +1539,7 @@ weth_out = ISwapRouter(swap_router).exactInputSingle({
 if (weth_out < min_weth_out) revert Router__SlippageExceeded();
 ```
 
-#### _swapFromWETH(weth_in, token_out, pool_fee, min_token_out) → uint256 amount_out
+#### \_swapFromWETH(weth_in, token_out, pool_fee, min_token_out) → uint256 amount_out
 
 Similar a `_swapToWETH` pero invirtiendo tokenIn/tokenOut.
 
@@ -1538,6 +1587,29 @@ error Router__UseVaultForWETH();
 error Router__UnauthorizedETHSender();
 error Router__ETHUnwrapFailed();
 ```
+
+### Addresses Mainnet
+
+### Balanced Tier
+
+| Contrato        | Address                                                                                                                 |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| StrategyManager | [`0xA0d462b84C2431463bDACDC2C5bc3172FC927B0B`](https://etherscan.io/address/0xa0d462b84c2431463bdacdc2c5bc3172fc927b0b) |
+| Vault (vxWETH)  | [`0x9D002dF2A5B632C0D8022a4738C1fa7465d88444`](https://etherscan.io/address/0x9d002df2a5b632c0d8022a4738c1fa7465d88444) |
+| LidoStrategy    | [`0xf8d1E54A07A47BB03833493EAEB7FE7432B53FCB`](https://etherscan.io/address/0xf8d1e54a07a47bb03833493eaeb7fe7432b53fcb) |
+| AaveStrategy    | [`0x8135Ed49ffFeEF4a1Bb5909c5bA96EEe9D4ed32A`](https://etherscan.io/address/0x8135ed49fffeef4a1bb5909c5ba96eee9d4ed32a) |
+| CurveStrategy   | [`0xF0C57C9c1974a14602074D85cfB1Bc251B67Dc00`](https://etherscan.io/address/0xf0c57c9c1974a14602074d85cfb1bc251b67dc00) |
+| Router          | [`0x3286c0cB7Bbc7DD4cC7C8752E3D65e275E1B1044`](https://etherscan.io/address/0x3286c0cb7bbc7dd4cc7c8752e3d65e275e1b1044) |
+
+### Aggressive Tier
+
+| Contrato          | Address                                                                                                                 |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| StrategyManager   | [`0xcCa54463BD2aEDF1773E9c3f45c6a954Aa9D9706`](https://etherscan.io/address/0xcca54463bd2aedf1773e9c3f45c6a954aa9d9706) |
+| Vault (vxWETH)    | [`0xA8cA9d84e35ac8F5af6F1D91fe4bE1C0BAf44296`](https://etherscan.io/address/0xa8ca9d84e35ac8f5af6f1d91fe4be1c0baf44296) |
+| CurveStrategy     | [`0x312510B911fA47D55c9f1a055B1987D51853A7DE`](https://etherscan.io/address/0x312510b911fa47d55c9f1a055b1987d51853a7de) |
+| UniswapV3Strategy | [`0x653D9C2dF3A32B872aEa4E3b4e7436577C5eEB62`](https://etherscan.io/address/0x653d9c2df3a32b872aea4e3b4e7436577c5eeb62) |
+| Router            | [`0xE898661760299f88e2B271a088987dacB8Fb3dE6`](https://etherscan.io/address/0xe898661760299f88e2b271a088987dacb8fb3de6) |
 
 ---
 
