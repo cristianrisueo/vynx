@@ -4,51 +4,51 @@ pragma solidity 0.8.33;
 /**
  * @title IWstETH
  * @author cristianrisueo
- * @notice Interfaz del contrato wstETH (Wrapped Staked ETH) de Lido
+ * @notice Interface for the Lido wstETH (Wrapped Staked ETH) contract
  *
- * @dev stETH es un rebase token (balance crece automáticamente), lo que rompe la integración
- *      con algunos protocolos. wstETH es non-rebasing: balance fijo, exchange rate creciente
- *      Funciona igual, pero permite composibilidad. VynX usa wstETH para accounting simple y
- *      compatibilidad total con Aave, Curve y Uniswap V3
+ * @dev stETH is a rebase token (balance grows automatically), which breaks integration
+ *      with some protocols. wstETH is non-rebasing: fixed balance, growing exchange rate.
+ *      Works the same way, but enables composability. VynX uses wstETH for simple accounting and
+ *      full compatibility with Aave, Curve and Uniswap V3
  *
- * @dev No importamos lidofinance/core porque:
- *      - 1. Mezcla Solidity 0.4/0.6/0.8 con dependencias legacy rotas
- *      - 2. Solo necesitamos 4 funciones
+ * @dev We don't import lidofinance/core because:
+ *      - 1. It mixes Solidity 0.4/0.6/0.8 with broken legacy dependencies
+ *      - 2. We only need 4 functions
  *
- * @dev wstETH es también ERC20 (transfer, balanceOf, approve cubiertos por IERC20 de OpenZeppelin)
+ * @dev wstETH is also ERC20 (transfer, balanceOf, approve covered by OpenZeppelin's IERC20)
  *
- * @dev Signatures verificadas contra el contrato deployado en mainnet:
+ * @dev Signatures verified against the contract deployed on mainnet:
  *      https://etherscan.io/address/0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0
  */
 interface IWstETH {
     /**
-     * @notice Wrappea stETH a wstETH
-     * @dev El caller debe haber aprobado previamente stETH al contrato wstETH
-     * @param _stETH_amount Cantidad de stETH a wrappear
-     * @return Cantidad de wstETH recibida
+     * @notice Wraps stETH to wstETH
+     * @dev The caller must have previously approved stETH to the wstETH contract
+     * @param _stETH_amount Amount of stETH to wrap
+     * @return Amount of wstETH received
      */
     function wrap(uint256 _stETH_amount) external returns (uint256);
 
     /**
-     * @notice Unwrappea wstETH a stETH
-     * @param _wstETH_amount Cantidad de wstETH a unwrappear
-     * @return Cantidad de stETH recibida
+     * @notice Unwraps wstETH to stETH
+     * @param _wstETH_amount Amount of wstETH to unwrap
+     * @return Amount of stETH received
      */
     function unwrap(uint256 _wstETH_amount) external returns (uint256);
 
     /**
-     * @notice Convierte una cantidad de stETH a su equivalente en wstETH
-     * @dev Función view para cálculos off-chain y estimaciones
-     * @param _stETH_amount Cantidad de stETH a convertir en wstETH
-     * @return Cantidad equivalente de wstETH
+     * @notice Converts an amount of stETH to its wstETH equivalent
+     * @dev View function for off-chain calculations and estimates
+     * @param _stETH_amount Amount of stETH to convert to wstETH
+     * @return Equivalent amount of wstETH
      */
     function getWstETHByStETH(uint256 _stETH_amount) external view returns (uint256);
 
     /**
-     * @notice Convierte una cantidad de wstETH a su equivalente en stETH
-     * @dev Función view para cálculos off-chain y estimaciones
-     * @param _wstETH_amount Cantidad de wstETH a convertir en stETH
-     * @return Cantidad equivalente de stETH
+     * @notice Converts an amount of wstETH to its stETH equivalent
+     * @dev View function for off-chain calculations and estimates
+     * @param _wstETH_amount Amount of wstETH to convert to stETH
+     * @return Equivalent amount of stETH
      */
     function getStETHByWstETH(uint256 _wstETH_amount) external view returns (uint256);
 }

@@ -16,20 +16,20 @@ import {IWETH} from "@aave/contracts/misc/interfaces/IWETH.sol";
 /**
  * @title FullFlowTest
  * @author cristianrisueo
- * @notice Tests de integración end-to-end para el protocolo completo
- * @dev Fork de Mainnet real - valida flujos que cruzan vault → manager → strategies → protocolos
+ * @notice End-to-end integration tests for the complete protocol
+ * @dev Real Mainnet fork - validates flows crossing vault → manager → strategies → protocols
  */
 contract FullFlowTest is Test {
     //* Variables de estado
 
-    /// @notice Instancias del protocolo: Vault, manager y estrategias
+    /// @notice Protocol instances: Vault, manager and strategies
     Vault public vault;
     StrategyManager public manager;
     AaveStrategy public aave_strategy;
     LidoStrategy public lido_strategy;
     Router public router;
 
-    /// @notice Direcciones de los contratos en Mainnet
+    /// @notice Mainnet contract addresses
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant WSTETH = 0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0;
     address constant STETH = 0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84;
@@ -44,25 +44,25 @@ contract FullFlowTest is Test {
     address constant POSITION_MANAGER = 0xC36442b4a4522E871399CD717aBDD847Ab11FE88;
     uint24 constant POOL_FEE = 3000;
 
-    /// @notice Usuarios de prueba
+    /// @notice Test users
     address public alice = makeAddr("alice");
     address public bob = makeAddr("bob");
     address public founder;
 
-    //* Setup del entorno de testing
+    //* Testing environment setup
 
     /**
-     * @notice Configura el entorno de testing
-     * @dev Fork de Mainnet con todo el protocolo desplegado y conectado
+     * @notice Configures the testing environment
+     * @dev Mainnet fork with the entire protocol deployed and connected
      */
     function setUp() public {
-        // Crea un fork de Mainnet usando el endpoint de Alchemy
+        // Creates a Mainnet fork using the Alchemy endpoint
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Setea el founder
+        // Sets the founder
         founder = makeAddr("founder");
 
-        // Despliega y conecta vault y manager con parámetros del tier Balanced
+        // Deploys and connects vault and manager with Balanced tier parameters
         manager = new StrategyManager(
             WETH,
             IStrategyManager.TierConfig({
@@ -86,10 +86,10 @@ contract FullFlowTest is Test {
         );
         manager.initialize(address(vault));
 
-        // Configura al test contract como keeper oficial
+        // Configures the test contract as the official keeper
         vault.setOfficialKeeper(address(this), true);
 
-        // Despliega estrategias con direcciones reales de Mainnet
+        // Deploys strategies with real Mainnet addresses
         aave_strategy = new AaveStrategy(
             address(manager),
             WETH,
@@ -105,15 +105,15 @@ contract FullFlowTest is Test {
         );
         lido_strategy = new LidoStrategy(address(manager), WSTETH, WETH, UNISWAP_ROUTER, uint24(500));
 
-        // Conecta estrategias al manager
+        // Connects strategies to the manager
         manager.addStrategy(address(aave_strategy));
         manager.addStrategy(address(lido_strategy));
 
-        // Mock Aave APY para que allocation funcione y Lido APY a 0 para evitar slippage en withdrawals
+        // Mock Aave APY so allocation works and Lido APY to 0 to avoid slippage on withdrawals
         vm.mockCall(address(aave_strategy), abi.encodeWithSignature("apy()"), abi.encode(uint256(300)));
         vm.mockCall(address(lido_strategy), abi.encodeWithSignature("apy()"), abi.encode(uint256(50)));
 
-        // Despliega Router
+        // Deploys Router
         router = new Router(WETH, address(vault), UNISWAP_ROUTER);
 
         // Seed pool wstETH/WETH
@@ -145,21 +145,21 @@ contract FullFlowTest is Test {
 
     receive() external payable {}
 
-    //* Funciones internas helpers
+    //* Internal helper functions
 
     /**
-     * @notice Helper de depósito utilizado en la mayoría de tests
-     * @dev Los helpers solo se usan para happy paths, no casos donde se espera revert
-     * @param user Usuario utilizado en la interacción
-     * @param amount Cantidad entregada al usuario
-     * @return shares Cantidad de shares minteadas al usuario tras el depósito
+     * @notice Deposit helper used in most tests
+     * @dev Helpers are only used for happy paths, not cases where a revert is expected
+     * @param user User used in the interaction
+     * @param amount Amount given to the user
+     * @return shares Amount of shares minted to the user after the deposit
      */
     function _deposit(address user, uint256 amount) internal returns (uint256 shares) {
-        // Entrega la cantidad de WETH al usuario y usa su address
+        // Gives the user the WETH amount and uses their address
         deal(WETH, user, amount);
         vm.startPrank(user);
 
-        // Aprueba al vault la transferencia de WETH y deposita la cantidad en el vault
+        // Approves the vault for the WETH transfer and deposits the amount into the vault
         IERC20(WETH).approve(address(vault), amount);
         shares = vault.deposit(amount, user);
 
@@ -167,134 +167,134 @@ contract FullFlowTest is Test {
     }
 
     /**
-     * @notice Helper de retiro utilizado en la mayoría de tests
-     * @dev Los helpers solo se usan para happy paths, no casos donde se espera revert
-     * @param user Usuario utilizado en la interacción
-     * @param amount Cantidad a retirar
-     * @return shares Cantidad de shares del usuario quemadas tras el retiro
+     * @notice Withdraw helper used in most tests
+     * @dev Helpers are only used for happy paths, not cases where a revert is expected
+     * @param user User used in the interaction
+     * @param amount Amount to withdraw
+     * @return shares Amount of user shares burned after the withdrawal
      */
     function _withdraw(address user, uint256 amount) internal returns (uint256 shares) {
-        // Top-up vault WETH para cubrir slippage de swaps en estrategias (Curve/Uniswap)
+        // Top-up vault WETH to cover swap slippage in strategies (Curve/Uniswap)
         deal(WETH, address(vault), IERC20(WETH).balanceOf(address(vault)) + amount);
         vm.prank(user);
         shares = vault.withdraw(amount, user, user);
     }
 
-    //* Tests de integración: Flujos E2E
+    //* Integration tests: E2E Flows
 
     /**
-     * @notice Test E2E: Deposit → Allocation → Withdraw
-     * @dev El happy path completo de un usuario interactuando con el protocolo
-     *      Valida que los fondos fluyan correctamente: usuario → vault → manager → strategias → protocolos
-     *      y de vuelta al usuario al retirar
+     * @notice E2E Test: Deposit → Allocation → Withdraw
+     * @dev The complete happy path of a user interacting with the protocol
+     *      Validates that funds flow correctly: user → vault → manager → strategies → protocols
+     *      and back to the user on withdrawal
      */
     function test_E2E_DepositAllocateWithdraw() public {
-        // Alice deposita 50 WETH (supera threshold, se envía directamente a las estrategias)
+        // Alice deposits 50 WETH (exceeds threshold, sent directly to strategies)
         uint256 deposit_amount = 50 ether;
         _deposit(alice, deposit_amount);
 
-        // Comprueba que: Idle buffer del vault vacío, assets en las estrategias mayores que 0
-        assertEq(vault.idle_buffer(), 0, "Idle buffer deberia estar vacio tras allocation");
-        assertGt(aave_strategy.totalAssets(), 0, "Aave deberia tener fondos");
-        // Lido APY mock bajo min_allocation_threshold, toda la allocation va a Aave
-        assertEq(lido_strategy.totalAssets(), 0, "Lido no deberia tener fondos con APY bajo");
+        // Checks that: Vault idle buffer is empty, assets in strategies are greater than 0
+        assertEq(vault.idle_buffer(), 0, "Idle buffer should be empty after allocation");
+        assertGt(aave_strategy.totalAssets(), 0, "Aave should have funds");
+        // Lido APY mock below min_allocation_threshold, all allocation goes to Aave
+        assertEq(lido_strategy.totalAssets(), 0, "Lido should not have funds with low APY");
 
-        // Comprueba que el total del protocolo sea aproximadamente lo depositado (tolerancia de 0.1%)
-        // Recuerda que vault.totalAssets suma idle buffer + manager.totalAssets
+        // Checks that total protocol assets are approximately the deposited amount (0.1% tolerance)
+        // Remember that vault.totalAssets sums idle buffer + manager.totalAssets
         assertApproxEqRel(vault.totalAssets(), deposit_amount, 0.001e18, "Total assets incorrecto");
 
-        // Alice retira 40 WETH netos (los fondos vuelven de las estrategias)
+        // Alice withdraws 40 net WETH (funds return from strategies)
         uint256 withdraw_amount = 40 ether;
         _withdraw(alice, withdraw_amount);
 
-        // Comprueba que Alice recibió aproximadamente la cantidad neta (tolerancia 2 wei por redondeo en estrategias)
-        assertApproxEqRel(IERC20(WETH).balanceOf(alice), withdraw_amount, 0.01e18, "Alice no recibio WETH");
+        // Checks that Alice received approximately the net amount (2 wei tolerance for rounding in strategies)
+        assertApproxEqRel(IERC20(WETH).balanceOf(alice), withdraw_amount, 0.01e18, "Alice did not receive WETH");
 
-        // Comprueba que Alice aún tiene shares por el resto no retirado
-        assertGt(vault.balanceOf(alice), 0, "Alice deberia tener shares restantes");
+        // Checks that Alice still has shares for the remaining unwithdra amount
+        assertGt(vault.balanceOf(alice), 0, "Alice should have remaining shares");
     }
 
     /**
-     * @notice Test E2E: Múltiples usuarios depositando y retirando concurrentemente
-     * @dev Valida que las shares y assets se calculen correctamente cuando hay varios usuarios
-     *      en el vault simultáneamente. Es crucial para verificar que no hay comportamientos
-     *      extraños al entrar varios usuarios
+     * @notice E2E Test: Multiple users depositing and withdrawing concurrently
+     * @dev Validates that shares and assets are calculated correctly when multiple users
+     *      are in the vault simultaneously. Crucial for verifying there are no unexpected
+     *      behaviors when multiple users enter
      */
     function test_E2E_MultipleUsersConcurrent() public {
-        // Alice deposita 30 WETH y Bob deposita 20 WETH (total 50, supera threshold)
+        // Alice deposits 30 WETH and Bob deposits 20 WETH (total 50, exceeds threshold)
         uint256 alice_deposit = 30 ether;
         uint256 bob_deposit = 20 ether;
 
         uint256 alice_shares = _deposit(alice, alice_deposit);
         uint256 bob_shares = _deposit(bob, bob_deposit);
 
-        // Comprueba que ambos tienen shares proporcionales a su depósito (Alice > Bob)
-        assertGt(alice_shares, bob_shares, "Alice deberia tener mas shares que Bob");
+        // Checks that both have shares proportional to their deposit (Alice > Bob)
+        assertGt(alice_shares, bob_shares, "Alice should have more shares than Bob");
 
-        // Comprueba que el TVL del protocolo sea igual a los depósitos (tolerancia de 0.1%)
+        // Checks that the protocol TVL equals the deposits (0.1% tolerance)
         uint256 total_deposited = alice_deposit + bob_deposit;
         assertApproxEqRel(vault.totalAssets(), total_deposited, 0.001e18, "Total incorrecto");
 
-        // Alice retira 20 WETH y comprueba que su balance de WETH sea el correcto (tolerancia 2 wei por redondeo)
+        // Alice withdraws 20 WETH and checks her WETH balance is correct (2 wei tolerance for rounding)
         _withdraw(alice, 20 ether);
-        assertApproxEqRel(IERC20(WETH).balanceOf(alice), 20 ether, 0.01e18, "Alice no recibio 20 WETH");
+        assertApproxEqRel(IERC20(WETH).balanceOf(alice), 20 ether, 0.01e18, "Alice did not receive 20 WETH");
 
-        // Bob retira 15 WETH y comprueba que su balance de WETH sea el correcto (tolerancia 2 wei por redondeo)
+        // Bob withdraws 15 WETH and checks his WETH balance is correct (2 wei tolerance for rounding)
         _withdraw(bob, 15 ether);
-        assertApproxEqRel(IERC20(WETH).balanceOf(bob), 15 ether, 0.01e18, "Bob no recibio 15 WETH");
+        assertApproxEqRel(IERC20(WETH).balanceOf(bob), 15 ether, 0.01e18, "Bob did not receive 15 WETH");
 
-        // Comprueba que ambos tengan shares restantes por lo que les queda depositado
-        assertGt(vault.balanceOf(alice), 0, "Alice deberia tener shares");
-        assertGt(vault.balanceOf(bob), 0, "Bob deberia tener shares");
+        // Checks that both still have shares for what remains deposited
+        assertGt(vault.balanceOf(alice), 0, "Alice should have shares");
+        assertGt(vault.balanceOf(bob), 0, "Bob should have shares");
     }
 
     /**
-     * @notice Test E2E: Deposit → Allocation → Rebalance → Withdraw
-     * @dev Valida el flujo completo incluyendo rebalanceo entre estrategias
-     *      Cambia el max allocation para forzar desbalance y comprobar que el rebalance
-     *      mueva fondos correctamente sin perder assets
+     * @notice E2E Test: Deposit → Allocation → Rebalance → Withdraw
+     * @dev Validates the complete flow including rebalancing between strategies
+     *      Changes max allocation to force imbalance and checks that rebalance
+     *      moves funds correctly without losing assets
      */
     function test_E2E_DepositRebalanceWithdraw() public {
-        // Alice deposita 100 WETH (supera threshold, se envía a estrategias)
+        // Alice deposits 100 WETH (exceeds threshold, sent to strategies)
         _deposit(alice, 100 ether);
 
-        // Guarda el total antes del rebalance (100 WETH)
+        // Saves total before rebalance (100 WETH)
         uint256 total_before = vault.totalAssets();
 
-        // Cambia el max allocation (pasa 50% al 40%) para forzar un desbalance
+        // Changes max allocation (from 50% to 40%) to force an imbalance
         manager.setMaxAllocationPerStrategy(4000);
 
-        // Si shouldRebalance es true, ejecuta rebalance
+        // If shouldRebalance is true, executes rebalance
         if (manager.shouldRebalance()) {
             manager.rebalance();
         }
 
-        // Comprueba que tras el rebalance de assets entre estrategias no se perdieron fondos en el vault
-        // de nuevo, con un margen de tolerancia de 0.1%
-        assertApproxEqRel(vault.totalAssets(), total_before, 0.01e18, "Se perdieron fondos en rebalance");
+        // Checks that after rebalancing assets between strategies no funds were lost in the vault
+        // again, with a tolerance margin of 0.1%
+        assertApproxEqRel(vault.totalAssets(), total_before, 0.01e18, "Funds were lost in rebalance");
 
-        // Alice retira 80 WETH y comprueba que su balance de WETH es correcto (tolerancia 2 wei por redondeo)
+        // Alice withdraws 80 WETH and checks her WETH balance is correct (2 wei tolerance for rounding)
         _withdraw(alice, 80 ether);
-        assertApproxEqRel(IERC20(WETH).balanceOf(alice), 80 ether, 0.01e18, "Alice no recibio fondos post-rebalance");
+        assertApproxEqRel(IERC20(WETH).balanceOf(alice), 80 ether, 0.01e18, "Alice did not receive funds post-rebalance");
     }
 
     /**
-     * @notice Test E2E: Deposit → Pause → Unpause → Withdraw
-     * @dev Valida que el vault sigue operando correctamente tras una pausa
-     *      Los fondos deben estar funcionando correctamente en las estrategias
-     *      durante la pausa y ser retirables normalmente tras despausar
+     * @notice E2E Test: Deposit → Pause → Unpause → Withdraw
+     * @dev Validates that the vault continues operating correctly after a pause
+     *      Funds must be working correctly in the strategies
+     *      during the pause and be normally withdrawable after unpausing
      */
     function test_E2E_PauseUnpauseRecovery() public {
-        // Alice deposita 50 WETH (supera threshold, se envía a estrategias)
+        // Alice deposits 50 WETH (exceeds threshold, sent to strategies)
         _deposit(alice, 50 ether);
 
-        // Guarda el total antes del rebalance (50 WETH)
+        // Saves total before rebalance (50 WETH)
         uint256 total_before_pause = vault.totalAssets();
 
-        // Owner pausa el vault
+        // Owner pauses the vault
         vault.pause();
 
-        // Intenta depositar con Bob. Espera error, comprobando que no se puede por estar pausado
+        // Attempts to deposit with Bob. Expects error, confirming it cannot be done while paused
         deal(WETH, bob, 10 ether);
         vm.startPrank(bob);
 
@@ -305,117 +305,117 @@ contract FullFlowTest is Test {
 
         vm.stopPrank();
 
-        // Comprueba que el vault sigue teniendo los fondos depositados por Alice en las estrategias
-        assertApproxEqRel(vault.totalAssets(), total_before_pause, 0.001e18, "Fondos perdidos durante pausa");
+        // Checks that the vault still has Alice's deposited funds in strategies
+        assertApproxEqRel(vault.totalAssets(), total_before_pause, 0.001e18, "Funds lost during pause");
 
-        // Owner despausa el vault
+        // Owner unpauses the vault
         vault.unpause();
 
-        // Alice retira 40 ETH y comprueba que su balance de WETH es correcto (tolerancia 2 wei por redondeo)
+        // Alice withdraws 40 ETH and checks her WETH balance is correct (2 wei tolerance for rounding)
         _withdraw(alice, 40 ether);
         assertApproxEqRel(IERC20(WETH).balanceOf(alice), 40 ether, 0.01e18, "Alice no pudo retirar post-unpause");
     }
 
     /**
-     * @notice Test E2E: Deposit → Remove Strategy → Withdraw
-     * @dev Simula migración: se elimina una estrategia y los usuarios pueden seguir retirando
-     *      Este test es muy importante para comprobar que la eliminación de una estrategia no
-     *      deja fondos bloqueados
+     * @notice E2E Test: Deposit → Remove Strategy → Withdraw
+     * @dev Simulates migration: a strategy is removed and users can continue withdrawing
+     *      This test is very important to verify that removing a strategy does not
+     *      leave funds locked
      */
     function test_E2E_RemoveStrategyAndWithdraw() public {
-        // Alice deposita 50 WETH (se envía directamente a las estrategias)
+        // Alice deposits 50 WETH (sent directly to strategies)
         _deposit(alice, 50 ether);
 
-        // Guarda el balance de Lido antes de eliminar la estrategia
+        // Saves Lido balance before removing the strategy
         uint256 lido_assets = lido_strategy.totalAssets();
 
-        // Retira los fondos de Lido (usando el address del manager para hacer la llamada)
-        // vm.prank -> Solo la siguiente llamada, vm.startPrank -> hasta que se haga stopPrank
+        // Withdraws Lido funds (using manager address to make the call)
+        // vm.prank -> Only the next call, vm.startPrank -> until stopPrank is done
         if (lido_assets > 0) {
             vm.prank(address(manager));
             lido_strategy.withdraw(lido_assets);
         }
 
-        // Si queda dust tras el swap, mock totalAssets a 0 para permitir removeStrategy
+        // If dust remains after the swap, mock totalAssets to 0 to allow removeStrategy
         if (lido_strategy.totalAssets() > 0) {
             vm.mockCall(address(lido_strategy), abi.encodeWithSignature("totalAssets()"), abi.encode(uint256(0)));
         }
 
-        // Elimina la estrategia de Lido (index 1) y comprueba que solo quede 1 estrategia disponible (Aave)
+        // Removes the Lido strategy (index 1) and checks that only 1 available strategy remains (Aave)
         manager.removeStrategy(1);
-        assertEq(manager.strategiesCount(), 1, "Deberia quedar 1 estrategia");
+        assertEq(manager.strategiesCount(), 1, "Should have 1 strategy remaining");
 
-        // Guarda el balance de WETH en la estrtegia de Aave y se retira la mitad. Tras eliminar una
-        // estrategia se hace un rebalance, por lo que Aave debería tener el 50% del TVL (25 WETH) máximo
-        // y el otro debería estar en el balance del manager esperando una nueva estrategia
+        // Saves WETH balance in the Aave strategy and withdraws half. After removing a
+        // strategy a rebalance is done, so Aave should have at most 50% of TVL (25 WETH)
+        // and the other should be in the manager balance waiting for a new strategy
         uint256 aave_assets = aave_strategy.totalAssets();
         uint256 safe_withdraw = aave_assets / 2;
 
-        // Alice realiza el retiro y comprueba que su balance de WETH es correcto
+        // Alice makes the withdrawal and checks her WETH balance is correct
         _withdraw(alice, safe_withdraw);
         assertApproxEqRel(IERC20(WETH).balanceOf(alice), safe_withdraw, 0.01e18, "Alice no pudo retirar post-remove");
     }
 
     /**
-     * @notice Test E2E: Yield accrual con paso del tiempo
-     * @dev Avanza el tiempo 30 días para comprobar que los aTokens y cTokens acumulan yield real.
-     *      Este test valida que el protocolo se beneficia del yield de Aave y Compound
+     * @notice E2E Test: Yield accrual with time passage
+     * @dev Advances time 30 days to verify that aTokens and cTokens accumulate real yield.
+     *      This test validates that the protocol benefits from Aave and Compound yield
      */
     function test_E2E_YieldAccrual() public {
-        // Alice deposita 100 WETH
+        // Alice deposits 100 WETH
         _deposit(alice, 100 ether);
 
-        // Guarda el total de assets del protocolo antes de avanzar el tiempo
+        // Saves total protocol assets before advancing time
         uint256 total_before = vault.totalAssets();
 
-        // Avanza 30 días y bloques para acumular yield (aToken rebase necesita avance de bloques)
+        // Advances 30 days and blocks to accumulate yield (aToken rebase needs block advancement)
         vm.warp(block.timestamp + 30 days);
         vm.roll(block.number + 216000);
 
-        // Comprueba que el total de assets no disminuyó (yield >= 0)
+        // Checks that total assets did not decrease (yield >= 0)
         uint256 total_after = vault.totalAssets();
-        assertGe(total_after, total_before, "El vault no deberia perder assets con el tiempo");
+        assertGe(total_after, total_before, "The vault should not lose assets over time");
     }
 
     //* === Router Integration Tests ===
 
     /**
-     * @notice Test E2E: Depositar USDC vía Router → Retirar USDC vía Router
+     * @notice E2E Test: Deposit USDC via Router → Withdraw USDC via Router
      */
     function test_E2E_Router_DepositUSDC_WithdrawUSDC() external {
-        // Setup: dar USDC a Alice
+        // Setup: give USDC to Alice
         uint256 usdc_amount = 5000e6; // 5000 USDC
         deal(USDC, alice, usdc_amount);
 
-        // 1. Alice deposita USDC vía Router
+        // 1. Alice deposits USDC via Router
         vm.startPrank(alice);
         IERC20(USDC).approve(address(router), usdc_amount);
         uint256 shares = router.zapDepositERC20(USDC, usdc_amount, 500, 0);
 
-        // 2. Avanzar tiempo y simular yield
+        // 2. Advance time and simulate yield
         skip(7 days);
 
-        // 3. Alice retira todo en USDC
+        // 3. Alice withdraws everything in USDC
         vault.approve(address(router), shares);
         uint256 usdc_out = router.zapWithdrawERC20(shares, USDC, 500, 0);
         vm.stopPrank();
 
-        // Verificar: Alice debería recibir aproximadamente lo depositado (sin yield significativo en 7 días)
+        // Verify: Alice should receive approximately the deposited amount (no significant yield in 7 days)
         assertApproxEqRel(usdc_out, usdc_amount, 0.02e18, "Should receive ~deposited amount");
     }
 
     /**
-     * @notice Test E2E: Depositar ETH vía Router → Retirar ETH vía Router
+     * @notice E2E Test: Deposit ETH via Router → Withdraw ETH via Router
      */
     function test_E2E_Router_DepositETH_WithdrawETH() external {
         uint256 eth_amount = 10 ether;
         deal(alice, eth_amount);
 
-        // 1. Alice deposita ETH
+        // 1. Alice deposits ETH
         vm.prank(alice);
         uint256 shares = router.zapDepositETH{value: eth_amount}();
 
-        // 2. Alice retira todo en ETH - top-up vault para cubrir slippage de swaps
+        // 2. Alice withdraws everything in ETH - top-up vault to cover swap slippage
         uint256 assets_est = vault.convertToAssets(shares);
         deal(WETH, address(vault), IERC20(WETH).balanceOf(address(vault)) + assets_est);
         vm.startPrank(alice);
@@ -423,46 +423,46 @@ contract FullFlowTest is Test {
         uint256 eth_out = router.zapWithdrawETH(shares);
         vm.stopPrank();
 
-        // Verificar: eth_out debe ser aproximadamente lo depositado
+        // Verify: eth_out must be approximately the deposited amount
         assertApproxEqRel(eth_out, eth_amount, 0.01e18, "Should receive ~deposited ETH");
         assertEq(vault.balanceOf(alice), 0, "Shares should be burned");
     }
 
     /**
-     * @notice Test E2E: Depositar DAI → Retirar USDC (tokens diferentes)
+     * @notice E2E Test: Deposit DAI → Withdraw USDC (different tokens)
      */
     function test_E2E_Router_DepositDAI_WithdrawUSDC() external {
         uint256 dai_amount = 5000e18; // 5000 DAI
         deal(DAI, alice, dai_amount);
 
-        // 1. Depositar DAI
+        // 1. Deposit DAI
         vm.startPrank(alice);
         IERC20(DAI).approve(address(router), dai_amount);
         uint256 shares = router.zapDepositERC20(DAI, dai_amount, 500, 0);
 
-        // 2. Retirar en USDC (diferente token)
+        // 2. Withdraw in USDC (different token)
         vault.approve(address(router), shares);
         uint256 usdc_out = router.zapWithdrawERC20(shares, USDC, 500, 0);
         vm.stopPrank();
 
-        // Verificar: USDC out ~= DAI in (ambos stablecoins 1:1)
+        // Verify: USDC out ~= DAI in (both stablecoins 1:1)
         assertApproxEqRel(usdc_out, dai_amount / 1e12, 0.05e18, "USDC should equal DAI");
     }
 
     /**
-     * @notice Test E2E: WBTC usa pool 0.3% (no 0.05%)
+     * @notice E2E Test: WBTC uses 0.3% pool (not 0.05%)
      */
     function test_E2E_Router_DepositWBTC_UsesPool3000() external {
         uint256 wbtc_amount = 1e8; // 1 WBTC (8 decimals)
         deal(WBTC, alice, wbtc_amount);
 
-        // Depositar con pool 0.3% (3000)
+        // Deposit with 0.3% pool (3000)
         vm.startPrank(alice);
         IERC20(WBTC).approve(address(router), wbtc_amount);
         uint256 shares = router.zapDepositERC20(WBTC, wbtc_amount, 3000, 0);
         vm.stopPrank();
 
-        // Verificar que recibió shares (pool funcionó)
+        // Verify that it received shares (pool worked)
         assertGt(shares, 0, "Should receive shares using 0.3% pool");
     }
 }

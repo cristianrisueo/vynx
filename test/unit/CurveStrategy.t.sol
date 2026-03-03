@@ -10,17 +10,17 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 /**
  * @title CurveStrategyTest
  * @author cristianrisueo
- * @notice Tests unitarios para CurveStrategy con fork de Mainnet
- * @dev Fork test real contra Curve stETH/ETH pool y gauge — valida deposits, withdrawals y harvest
+ * @notice Unit tests for CurveStrategy with Mainnet fork
+ * @dev Real fork test against Curve stETH/ETH pool and gauge — validates deposits, withdrawals and harvest
  */
 contract CurveStrategyTest is Test {
     //* Variables de estado
 
-    /// @notice Instancia de la estrategia y manager
+    /// @notice Strategy and manager instances
     CurveStrategy public strategy;
     StrategyManager public manager;
 
-    /// @notice Direcciones de los contratos en Mainnet
+    /// @notice Mainnet contract addresses
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant STETH = 0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84;
     address constant CURVE_POOL = 0xDC24316b9AE028F1497c275EB9192a3Ea0f67022;
@@ -30,20 +30,20 @@ contract CurveStrategyTest is Test {
     address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
     uint24 constant POOL_FEE = 3000; // CRV/WETH 0.3%
 
-    /// @notice Usuario de prueba
+    /// @notice Test user
     address public alice = makeAddr("alice");
 
-    //* Setup del entorno de testing
+    //* Testing environment setup
 
     /**
-     * @notice Configura el entorno de testing
-     * @dev Fork de Mainnet para interactuar con Curve stETH/ETH pool y gauge reales
+     * @notice Configures the testing environment
+     * @dev Mainnet fork to interact with real Curve stETH/ETH pool and gauge
      */
     function setUp() public {
-        // Crea un fork de Mainnet usando el endpoint de Alchemy
+        // Creates a Mainnet fork using the Alchemy endpoint
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Inicializa manager con parámetros del tier Balanced
+        // Initializes manager with Balanced tier parameters
         manager = new StrategyManager(
             WETH,
             IStrategyManager.TierConfig({
@@ -54,7 +54,7 @@ contract CurveStrategyTest is Test {
             })
         );
 
-        // Inicializa la estrategia con todas las dependencias de Curve
+        // Initializes the strategy with all Curve dependencies
         strategy = new CurveStrategy(
             address(manager),
             STETH,
@@ -68,48 +68,48 @@ contract CurveStrategyTest is Test {
         );
     }
 
-    //* Funciones internas helpers
+    //* Internal helper functions
 
     /**
-     * @notice Helper para depositar en la estrategia como manager
-     * @param amount Cantidad a depositar
+     * @notice Helper to deposit into the strategy as manager
+     * @param amount Amount to deposit
      */
     function _deposit(uint256 amount) internal {
-        // Da WETH a la estrategia y deposita como manager
+        // Gives WETH to the strategy and deposits as manager
         deal(WETH, address(strategy), amount);
         vm.prank(address(manager));
         strategy.deposit(amount);
     }
 
     /**
-     * @notice Helper para retirar de la estrategia como manager
-     * @param amount Cantidad a retirar
+     * @notice Helper to withdraw from the strategy as manager
+     * @param amount Amount to withdraw
      */
     function _withdraw(uint256 amount) internal {
         vm.prank(address(manager));
         strategy.withdraw(amount);
     }
 
-    //* Testing de deposit
+    //* Deposit tests
 
     /**
-     * @notice Test de depósito básico en Curve
-     * @dev Comprueba que WETH → stETH → LP → gauge y totalAssets lo refleje
+     * @notice Basic Curve deposit test
+     * @dev Checks that WETH → stETH → LP → gauge and totalAssets reflects it
      */
     function test_Deposit_Basic() public {
-        // Deposita en Curve (WETH → ETH → stETH → add_liquidity → gauge)
+        // Deposits in Curve (WETH → ETH → stETH → add_liquidity → gauge)
         _deposit(10 ether);
 
-        // Comprueba que totalAssets refleje el depósito (tolerancia 1% por slippage/fees de Curve)
+        // Checks that totalAssets reflects the deposit (1% tolerance for Curve slippage/fees)
         assertApproxEqRel(strategy.totalAssets(), 10 ether, 0.01e18);
 
-        // Comprueba que hay LP tokens stakeados en el gauge
-        assertGt(strategy.lpBalance(), 0, "Debe haber LP tokens en el gauge");
+        // Checks that there are LP tokens staked in the gauge
+        assertGt(strategy.lpBalance(), 0, "Should have LP tokens in the gauge");
     }
 
     /**
-     * @notice Test de depósito solo desde manager
-     * @dev Comprueba que solo el manager pueda depositar
+     * @notice Deposit only from manager test
+     * @dev Checks that only the manager can deposit
      */
     function test_Deposit_RevertIfNotManager() public {
         deal(WETH, address(strategy), 10 ether);
@@ -120,8 +120,8 @@ contract CurveStrategyTest is Test {
     }
 
     /**
-     * @notice Test de depósito de cantidad cero
-     * @dev Comprueba que revierta con cantidad cero
+     * @notice Zero amount deposit test
+     * @dev Checks it reverts with zero amount
      */
     function test_Deposit_RevertZeroAmount() public {
         vm.prank(address(manager));
@@ -129,45 +129,45 @@ contract CurveStrategyTest is Test {
         strategy.deposit(0);
     }
 
-    //* Testing de withdraw
+    //* Withdraw tests
 
     /**
-     * @notice Test de retiro básico de Curve
-     * @dev Comprueba que gauge.withdraw → remove_liquidity_one_coin → WETH al manager
+     * @notice Basic Curve withdrawal test
+     * @dev Checks that gauge.withdraw → remove_liquidity_one_coin → WETH to manager
      */
     function test_Withdraw_Basic() public {
-        // Deposita primero
+        // Deposits first
         _deposit(10 ether);
 
-        // Retira la mitad (tolerancia 2% por slippage en retiro de Curve)
+        // Withdraws half (2% tolerance for slippage in Curve withdrawal)
         _withdraw(5 ether);
 
-        // Comprueba que el manager recibió los fondos
+        // Checks that the manager received the funds
         assertApproxEqRel(IERC20(WETH).balanceOf(address(manager)), 5 ether, 0.02e18);
 
-        // Comprueba que queda aproximadamente la mitad en la estrategia
+        // Checks that approximately half remains in the strategy
         assertApproxEqRel(strategy.totalAssets(), 5 ether, 0.02e18);
     }
 
     /**
-     * @notice Test de retiro total de Curve
-     * @dev Comprueba que se pueda retirar todo el balance
+     * @notice Full Curve withdrawal test
+     * @dev Checks that the entire balance can be withdrawn
      */
     function test_Withdraw_Full() public {
-        // Deposita
+        // Deposits
         _deposit(10 ether);
 
-        // Retira todo
+        // Withdraws everything
         uint256 total = strategy.totalAssets();
         _withdraw(total);
 
-        // Comprueba que el balance en la estrategia sea 0 o mínimo residual
+        // Checks that the balance in the strategy is 0 or minimal residual
         assertApproxEqAbs(strategy.totalAssets(), 0, 0.001 ether);
     }
 
     /**
-     * @notice Test de retiro solo desde manager
-     * @dev Comprueba que solo el manager pueda retirar
+     * @notice Withdraw only from manager test
+     * @dev Checks that only the manager can withdraw
      */
     function test_Withdraw_RevertIfNotManager() public {
         _deposit(10 ether);
@@ -178,8 +178,8 @@ contract CurveStrategyTest is Test {
     }
 
     /**
-     * @notice Test de retiro de cantidad cero
-     * @dev Comprueba que revierta con cantidad cero
+     * @notice Zero amount withdrawal test
+     * @dev Checks it reverts with zero amount
      */
     function test_Withdraw_RevertZeroAmount() public {
         vm.prank(address(manager));
@@ -187,34 +187,34 @@ contract CurveStrategyTest is Test {
         strategy.withdraw(0);
     }
 
-    //* Testing de harvest
+    //* Harvest tests
 
     /**
-     * @notice Test de harvest con rewards CRV
-     * @dev Inyecta CRV tokens en el gauge para simular rewards acumulados y verifica reinversión
+     * @notice Harvest with CRV rewards test
+     * @dev Injects CRV tokens into the gauge to simulate accumulated rewards and verifies reinvestment
      */
     function test_Harvest_WithRewards() public {
-        // Deposita fondos para que haya LP tokens en el gauge
+        // Deposits funds so there are LP tokens in the gauge
         _deposit(100 ether);
 
-        // Inyecta CRV tokens en la estrategia para simular rewards del gauge
+        // Injects CRV tokens into the strategy to simulate gauge rewards
         deal(CRV_TOKEN, address(strategy), 100 ether);
 
-        // Avanza tiempo para acumular rewards
+        // Advances time to accumulate rewards
         skip(7 days);
         vm.roll(block.number + 50400);
 
-        // Harvest no debe revertir
+        // Harvest must not revert
         vm.prank(address(manager));
         strategy.harvest();
 
-        // Tras el harvest, los LP tokens deben haberse mantenido o incrementado
-        assertGt(strategy.lpBalance(), 0, "Debe haber LP tokens tras harvest");
+        // After harvest, LP tokens must have been maintained or increased
+        assertGt(strategy.lpBalance(), 0, "Should have LP tokens after harvest");
     }
 
     /**
-     * @notice Test de harvest solo desde manager
-     * @dev Comprueba que solo el manager pueda llamar harvest
+     * @notice Harvest only from manager test
+     * @dev Checks that only the manager can call harvest
      */
     function test_Harvest_RevertIfNotManager() public {
         vm.prank(alice);
@@ -222,67 +222,67 @@ contract CurveStrategyTest is Test {
         strategy.harvest();
     }
 
-    //* Testing de funciones de consulta
+    //* Query function tests
 
     /**
-     * @notice Test de APY
-     * @dev Comprueba que el APY sea el valor hardcodeado (600 bps = 6%)
+     * @notice APY test
+     * @dev Checks that APY is the hardcoded value (600 bps = 6%)
      */
     function test_Apy_ReturnsValidValue() public view {
         uint256 apy = strategy.apy();
 
-        // El APY de Curve está hardcodeado en 600 bps (6%)
+        // Curve APY is hardcoded at 600 bps (6%)
         assertEq(apy, 600);
     }
 
     /**
-     * @notice Test de nombre de la estrategia
-     * @dev Comprueba que devuelva el nombre correcto
+     * @notice Strategy name test
+     * @dev Checks that it returns the correct name
      */
     function test_Name() public view {
         assertEq(strategy.name(), "Curve stETH/ETH Strategy");
     }
 
     /**
-     * @notice Test de asset
-     * @dev Comprueba que devuelva la dirección de WETH
+     * @notice Asset test
+     * @dev Checks that it returns the WETH address
      */
     function test_Asset() public view {
         assertEq(strategy.asset(), WETH);
     }
 
     /**
-     * @notice Test de totalAssets sin depósitos
-     * @dev Comprueba que devuelva 0 sin depósitos previos
+     * @notice totalAssets without deposits test
+     * @dev Checks that it returns 0 without prior deposits
      */
     function test_TotalAssets_ZeroWithoutDeposits() public view {
         assertEq(strategy.totalAssets(), 0);
     }
 
     /**
-     * @notice Test de lpBalance sin depósitos
-     * @dev Comprueba que lpBalance devuelva 0 sin depósitos
+     * @notice lpBalance without deposits test
+     * @dev Checks that lpBalance returns 0 without deposits
      */
     function test_LpBalance_ZeroWithoutDeposits() public view {
         assertEq(strategy.lpBalance(), 0);
     }
 
     /**
-     * @notice Test de yield acumulado via virtual price
-     * @dev Tras tiempo, la virtual price del pool sube ligeramente por trading fees acumuladas
-     *      Esto causa que totalAssets crezca aunque no se haga harvest explícito
+     * @notice Yield accumulated via virtual price test
+     * @dev Over time, the pool virtual price rises slightly due to accumulated trading fees
+     *      This causes totalAssets to grow without an explicit harvest
      */
     function test_TotalAssets_GrowsWithTime() public {
-        // Deposita fondos
+        // Deposits funds
         _deposit(100 ether);
         uint256 assets_before = strategy.totalAssets();
 
-        // Avanza 30 días para que se acumulen trading fees en la virtual price
+        // Advances 30 days so trading fees accumulate in the virtual price
         skip(30 days);
         vm.roll(block.number + 216000);
 
-        // totalAssets debería ser mayor o igual (virtual price solo sube)
+        // totalAssets should be greater or equal (virtual price only goes up)
         uint256 assets_after = strategy.totalAssets();
-        assertGe(assets_after, assets_before, "totalAssets deberia crecer o mantenerse con el tiempo");
+        assertGe(assets_after, assets_before, "totalAssets should grow or stay the same over time");
     }
 }

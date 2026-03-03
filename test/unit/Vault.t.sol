@@ -15,19 +15,19 @@ import {IWETH} from "@aave/contracts/misc/interfaces/IWETH.sol";
 /**
  * @title VaultTest
  * @author cristianrisueo
- * @notice Tests unitarios para Vault con fork de Mainnet
- * @dev Fork test de mainnet, aquí no hay mierdas
+ * @notice Unit tests for Vault with Mainnet fork
+ * @dev Mainnet fork test, no bullshit here
  */
 contract VaultTest is Test {
     //* Variables de estado
 
-    /// @notice Instancia del vault, manager y estrategias
+    /// @notice Vault, manager and strategy instances
     Vault public vault;
     StrategyManager public manager;
     AaveStrategy public aave_strategy;
     LidoStrategy public lido_strategy;
 
-    /// @notice Direcciones de los contratos en Mainnet
+    /// @notice Mainnet contract addresses
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant WSTETH = 0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0;
     address constant STETH = 0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84;
@@ -39,29 +39,29 @@ contract VaultTest is Test {
     address constant POSITION_MANAGER = 0xC36442b4a4522E871399CD717aBDD847Ab11FE88;
     uint24 constant POOL_FEE = 3000;
 
-    /// @notice Usuarios de prueba
+    /// @notice Test users
     address public alice = makeAddr("alice");
     address public bob = makeAddr("bob");
     address public founder;
 
-    /// @notice Parámetros del vault
+    /// @notice Vault parameters
     uint256 constant MAX_TVL = 1000 ether;
 
-    //* Setup del entorno de testing
+    //* Testing environment setup
 
     /**
-     * @notice Configura el entorno de testing
-     * @dev Para un comportamiento real hacemos fork de Mainnet. No recomiendo testear en
-     *      testnets, los contratos desplegados SON UNA MIERDA, no es comportamiento real
+     * @notice Configures the testing environment
+     * @dev For real behavior we fork Mainnet. I don't recommend testing on
+     *      testnets, deployed contracts ARE BULLSHIT, not real behavior
      */
     function setUp() public {
-        // Crea un fork de Mainnet usando mi endpoint de Alchemy en env.var
+        // Creates a Mainnet fork using my Alchemy endpoint in env.var
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Setea el founder
+        // Sets the founder
         founder = makeAddr("founder");
 
-        // Inicializa el manager con parámetros del tier Balanced
+        // Initializes the manager with Balanced tier parameters
         manager = new StrategyManager(
             WETH,
             IStrategyManager.TierConfig({
@@ -72,7 +72,7 @@ contract VaultTest is Test {
             })
         );
 
-        // Inicializa el vault con parámetros del tier Balanced
+        // Initializes the vault with Balanced tier parameters
         vault = new Vault(
             WETH,
             address(manager),
@@ -87,7 +87,7 @@ contract VaultTest is Test {
         );
         manager.initialize(address(vault));
 
-        // Inicializa las estrategias con las direcciones reales de mainnet
+        // Initializes the strategies with real mainnet addresses
         aave_strategy = new AaveStrategy(
             address(manager),
             WETH,
@@ -103,11 +103,11 @@ contract VaultTest is Test {
         );
         lido_strategy = new LidoStrategy(address(manager), WSTETH, WETH, UNISWAP_ROUTER, uint24(500));
 
-        // Mock Aave APY para que allocation funcione y Lido APY a 0 para evitar slippage en withdrawals
+        // Mock Aave APY so allocation works and Lido APY to 0 to avoid slippage on withdrawals
         vm.mockCall(address(aave_strategy), abi.encodeWithSignature("apy()"), abi.encode(uint256(300)));
         vm.mockCall(address(lido_strategy), abi.encodeWithSignature("apy()"), abi.encode(uint256(50)));
 
-        // Añade las estrategias
+        // Adds the strategies
         manager.addStrategy(address(aave_strategy));
         manager.addStrategy(address(lido_strategy));
 
@@ -139,21 +139,21 @@ contract VaultTest is Test {
 
     receive() external payable {}
 
-    //* Funciones internas helpers
+    //* Internal helper functions
 
     /**
-     * @notice Helper de depósito utilizado en la mayoría de tests
-     * @dev Los helpers solo se usan para happy paths, no casos donde se espera revert
-     * @param user Usuario utilizado en la interacción
-     * @param amount Cantidad entregada al usuario
-     * @return shares Cantidad de shares minteadas al usuario tras el depósito
+     * @notice Deposit helper used in most tests
+     * @dev Helpers are only used for happy paths, not cases where a revert is expected
+     * @param user User used in the interaction
+     * @param amount Amount given to the user
+     * @return shares Amount of shares minted to the user after the deposit
      */
     function _deposit(address user, uint256 amount) internal returns (uint256 shares) {
-        // Entrega la cantidad de WETH al usuario y usa su address
+        // Gives the user the WETH amount and uses their address
         deal(WETH, user, amount);
         vm.startPrank(user);
 
-        // Aprueba al vault la transferencia de WETH y deposita la cantidad en el vault
+        // Approves the vault for the WETH transfer and deposits the amount into the vault
         IERC20(WETH).approve(address(vault), amount);
         shares = vault.deposit(amount, user);
 
@@ -161,75 +161,75 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Helper de retiro utilizado en la mayoría de tests
-     * @dev Los helpers solo se usan para happy paths, no casos donde se espera revert
-     * @param user Usuario utilizado en la interacción
-     * @param amount Cantidad entregada al usuario
-     * @return shares Cantidad de shares del usuario quemadas tras el retiro
+     * @notice Withdraw helper used in most tests
+     * @dev Helpers are only used for happy paths, not cases where a revert is expected
+     * @param user User used in the interaction
+     * @param amount Amount given to the user
+     * @return shares Amount of user shares burned after the withdrawal
      */
     function _withdraw(address user, uint256 amount) internal returns (uint256 shares) {
-        // Top-up vault WETH para cubrir slippage de swaps en estrategias (Curve/Uniswap)
+        // Top-up vault WETH to cover swap slippage in strategies (Curve/Uniswap)
         deal(WETH, address(vault), IERC20(WETH).balanceOf(address(vault)) + amount);
         vm.prank(user);
         shares = vault.withdraw(amount, user, user);
     }
 
-    //* Test unitarios de lógica principal: Depósitos
+    //* Unit tests for core logic: Deposits
 
     /**
-     * @notice Test de depósito básico
-     * @dev Comprueba que un usuario pueda depositar y recibir shares correctamente
+     * @notice Basic deposit test
+     * @dev Checks that a user can deposit and receive shares correctly
      */
     function test_Deposit_Basic() public {
-        // Usa a Alice para depositar 1 WETH
+        // Uses Alice to deposit 1 WETH
         uint256 amount = 1 ether;
         uint256 shares = _deposit(alice, amount);
 
-        // Comprueba shares recibidas por Alice, assets en el vault y assets en el buffer idle
+        // Checks shares received by Alice, assets in the vault and assets in the idle buffer
         assertEq(vault.balanceOf(alice), shares);
         assertEq(vault.totalAssets(), amount);
         assertEq(vault.idle_buffer(), amount);
     }
 
     /**
-     * @notice Test de depósito igual a IDLE threshold
-     * @dev Realiza depósito superior al threshold para comprobar que el vault hace allocation
+     * @notice Deposit equal to IDLE threshold test
+     * @dev Performs a deposit above the threshold to check that the vault does allocation
      */
     function test_Deposit_TriggersAllocation() public {
-        // Usa a alice para depositar cantidad límite
+        // Uses alice to deposit the limit amount
         _deposit(alice, vault.idle_threshold());
 
-        // Comprueba que tanto el vault cómo el buffer IDLE no tiene WETH
+        // Checks that neither the vault nor the IDLE buffer has WETH
         assertEq(vault.idle_buffer(), 0);
         assertGt(manager.totalAssets(), 0);
     }
 
     /**
-     * @notice Test de depósito de cantidad cero
-     * @dev Realiza depósito con cantidad cero y comprueba que se revierte con error esperado
+     * @notice Zero amount deposit test
+     * @dev Performs a zero amount deposit and checks it reverts with the expected error
      */
     function test_Deposit_RevertZero() public {
-        // Usa a Alice para depositar cantidad cero
+        // Uses Alice's address to deposit zero amount
         vm.prank(alice);
 
-        // Espera el error y deposita
+        // Expects the error and deposits
         vm.expectRevert(Vault.Vault__DepositBelowMinimum.selector);
         vault.deposit(0, alice);
     }
 
     /**
-     * @notice Test de depósito de cantidad por debajo de la mínima
-     * @dev Realiza depósito con cantidad ínfima y comprueba que se reviera con error esperado
+     * @notice Below minimum deposit amount test
+     * @dev Performs a tiny deposit and checks it reverts with the expected error
      */
     function test_Deposit_RevertBelowMin() public {
-        // Entrega a Alice 0.005 WETH y usa su address
+        // Gives Alice 0.005 WETH and uses her address
         deal(WETH, alice, 0.005 ether);
         vm.startPrank(alice);
 
-        // Aprueba al vault la transferencia
+        // Approves the vault for the transfer
         IERC20(WETH).approve(address(vault), 0.005 ether);
 
-        // Espera el error y deposita
+        // Expects the error and deposits
         vm.expectRevert(Vault.Vault__DepositBelowMinimum.selector);
         vault.deposit(0.005 ether, alice);
 
@@ -237,18 +237,18 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test de depósito de cantidad por encima de máximo TVL
-     * @dev Realiza depósito con cantidad superior y comprueba que se reviera con error esperado
+     * @notice Deposit above max TVL test
+     * @dev Performs a deposit above the max and checks it reverts with the expected error
      */
     function test_Deposit_RevertExceedsMaxTVL() public {
-        // Entrega a Alice cantidad superior al máximo permitido TVL y usa su address
+        // Gives Alice an amount above the maximum allowed TVL and uses her address
         deal(WETH, alice, MAX_TVL + 1);
         vm.startPrank(alice);
 
-        // Aprueba al vault la transferencia
+        // Approves the vault for the transfer
         IERC20(WETH).approve(address(vault), MAX_TVL + 1);
 
-        // Espera el error y deposita
+        // Expects the error and deposits
         vm.expectRevert(Vault.Vault__MaxTVLExceeded.selector);
         vault.deposit(MAX_TVL + 1, alice);
 
@@ -256,200 +256,200 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test de depósito cuando el vault está pausado
-     * @dev Realiza depósito con cantidad normal y comprueba que se reviera con error esperado
+     * @notice Deposit when vault is paused test
+     * @dev Performs a normal deposit and checks it reverts with the expected error
      */
     function test_Deposit_RevertWhenPaused() public {
-        // Pausa el vault
+        // Pauses the vault
         vault.pause();
 
-        // Entrega 1 WETH a Alice y usa su address
+        // Gives Alice 1 WETH and uses her address
         deal(WETH, alice, 1 ether);
         vm.startPrank(alice);
 
-        // Aprueba al vault la transferencia
+        // Approves the vault for the transfer
         IERC20(WETH).approve(address(vault), 1 ether);
 
-        // Espera el error y deposita
+        // Expects the error and deposits
         vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
         vault.deposit(1 ether, alice);
 
         vm.stopPrank();
     }
 
-    //* Testing de mint
+    //* Mint tests
 
     /**
-     * @notice Test de mint básico
-     * @dev Comprueba que un usuario pueda hacer mint y recibir shares correctamente
+     * @notice Basic mint test
+     * @dev Checks that a user can mint and receive shares correctly
      */
     function test_Mint_Basic() public {
-        // Entrega 10 WETH a Alice y usa su address
+        // Gives Alice 10 WETH and uses her address
         deal(WETH, alice, 10 ether);
         vm.startPrank(alice);
 
-        // Aprueba al vault la transferencia
+        // Approves the vault for the transfer
         IERC20(WETH).approve(address(vault), 10 ether);
 
-        // Realiza el mint de 5 WETH
+        // Mints 5 WETH
         vault.mint(5 ether, alice);
         vm.stopPrank();
 
-        // Comprueba que el balance de shares de Alice corresponda con 5 WETH (ratio 1:1)
+        // Checks that Alice's share balance corresponds to 5 WETH (1:1 ratio)
         assertEq(vault.balanceOf(alice), 5 ether);
     }
 
     /**
-     * @notice Test de mint de cantidad cero
-     * @dev Realiza mint con cantidad cero y comprueba que se revierte con error esperado
+     * @notice Zero amount mint test
+     * @dev Performs a zero amount mint and checks it reverts with the expected error
      */
     function test_Mint_RevertZero() public {
-        // Utiliza el address de Alice
+        // Uses Alice's address
         vm.prank(alice);
 
-        // Espera el error y mintea 0 shares
+        // Expects the error and mints 0 shares
         vm.expectRevert(Vault.Vault__DepositBelowMinimum.selector);
         vault.mint(0, alice);
     }
 
-    //* Testing de withdraw
+    //* Withdraw tests
 
     /**
-     * @notice Test de retiro desde buffer idle
-     * @dev Comprueba que se retire correctamente del idle sin tocar el manager
+     * @notice Withdraw from idle buffer test
+     * @dev Checks that withdrawal from idle works correctly without touching the manager
      */
     function test_Withdraw_FromIdle() public {
-        // Deposita 5 WETH (se queda en idle)
+        // Deposits 5 WETH (stays in idle)
         _deposit(alice, 5 ether);
 
-        // Retira 2 WETH
+        // Withdraws 2 WETH
         _withdraw(alice, 2 ether);
 
-        // Comprueba balance de Alice y que el manager siga vacío
+        // Checks Alice's balance and that the manager remains empty
         assertEq(IERC20(WETH).balanceOf(alice), 2 ether);
         assertEq(manager.totalAssets(), 0);
     }
 
     /**
-     * @notice Test de retiro desde estrategias
-     * @dev Comprueba que se retire del manager cuando el idle no es suficiente
+     * @notice Withdraw from strategies test
+     * @dev Checks that withdrawal from the manager works when idle is insufficient
      */
     function test_Withdraw_FromStrategies() public {
-        // Deposita 20 WETH (supera threshold, va al manager)
+        // Deposits 20 WETH (exceeds threshold, goes to manager)
         _deposit(alice, 20 ether);
 
-        // Retira 15 WETH
+        // Withdraws 15 WETH
         _withdraw(alice, 15 ether);
 
-        // Comprueba balance final de Alice (tolerancia 2 wei por redondeo en retiros proporcionales de estrategias)
+        // Checks Alice's final balance (2 wei tolerance for rounding in proportional strategy withdrawals)
         assertApproxEqRel(IERC20(WETH).balanceOf(alice), 15 ether, 0.01e18);
     }
 
     /**
-     * @notice Test de retiro cuando el vault está pausado
-     * @dev Tras el cambio de emergency exit, withdraw funciona con vault pausado.
-     *      Un usuario siempre debe poder retirar sus fondos
+     * @notice Withdraw when vault is paused test
+     * @dev After the emergency exit change, withdraw works with vault paused.
+     *      A user must always be able to withdraw their funds
      */
     function test_Withdraw_WorksWhenPaused() public {
-        // Deposita fondos primero
+        // Deposits funds first
         _deposit(alice, 5 ether);
 
-        // Pausa el vault
+        // Pauses the vault
         vault.pause();
 
-        // Withdraw debe ejecutarse correctamente estando pausado
+        // Withdraw must execute correctly while paused
         vm.prank(alice);
         uint256 shares = vault.withdraw(1 ether, alice, alice);
 
-        // Comprueba que Alice recibió sus assets y se quemaron las shares
+        // Checks that Alice received her assets and shares were burned
         assertEq(IERC20(WETH).balanceOf(alice), 1 ether);
         assertGt(shares, 0);
     }
 
-    //* Testing de redeem
+    //* Redeem tests
 
     /**
-     * @notice Test de redeem básico
-     * @dev Comprueba que un usuario pueda redimir shares por assets
+     * @notice Basic redeem test
+     * @dev Checks that a user can redeem shares for assets
      */
     function test_Redeem_Basic() public {
-        // Deposita y obtiene shares
+        // Deposits and gets shares
         uint256 shares = _deposit(alice, 5 ether);
 
-        // Usa a Alice para redimir sus shares
+        // Uses Alice to redeem her shares
         vm.prank(alice);
         uint256 assets = vault.redeem(shares, alice, alice);
 
-        // Comprueba que se quemaron las shares y se recibieron assets (sin fee, devuelve lo depositado)
+        // Checks that shares were burned and assets received (no fee, returns deposited amount)
         assertEq(vault.balanceOf(alice), 0);
         assertEq(assets, 5 ether);
     }
 
-    //* Testing de allocation
+    //* Allocation tests
 
     /**
-     * @notice Test de allocate idle por debajo del threshold
-     * @dev Comprueba que falle allocation manual si no hay suficiente idle
+     * @notice Allocate idle below threshold test
+     * @dev Checks that manual allocation fails if there is not enough idle
      */
     function test_AllocateIdle_RevertBelowThreshold() public {
-        // Deposita cantidad pequeña (bajo threshold)
+        // Deposits a small amount (below threshold)
         _deposit(alice, 1 ether);
 
-        // Espera error al intentar allocation manual sin llegar al mínimo
+        // Expects error on manual allocation attempt without reaching minimum
         vm.expectRevert(Vault.Vault__InsufficientIdleBuffer.selector);
         vault.allocateIdle();
     }
 
-    //* Testing de funciones de accounting
+    //* Accounting functions tests
 
     /**
-     * @notice Test de total assets sumando idle y manager
-     * @dev Comprueba que el total de assets sume correctamente ambas partes
+     * @notice Total assets summing idle and manager test
+     * @dev Checks that the total assets correctly sums both parts
      */
     function test_TotalAssets_IdlePlusManager() public {
-        // Deposita con Alice (se queda en idle)
+        // Deposits with Alice (stays in idle)
         _deposit(alice, 5 ether);
 
-        // Deposita con Bob (supera threshold, ejecuta allocation)
+        // Deposits with Bob (exceeds threshold, triggers allocation)
         _deposit(bob, 10 ether);
 
-        // Comprueba que el total sea la suma aproximada (por posibles fees/slippage)
+        // Checks that total is the approximate sum (accounting for possible fees/slippage)
         uint256 expected = 15 ether;
         assertApproxEqRel(vault.totalAssets(), expected, 0.001e18);
     }
 
     /**
-     * @notice Test de max deposit respetando TVL
-     * @dev Comprueba que la función devuelva el MAX_TVL
+     * @notice Max deposit respecting TVL test
+     * @dev Checks that the function returns MAX_TVL
      */
     function test_MaxDeposit_RespectsMaxTVL() public view {
-        // Comprueba que el máximo depósito permitido sea el TVL configurado
+        // Checks that the maximum allowed deposit is the configured TVL
         assertEq(vault.maxDeposit(alice), MAX_TVL);
     }
 
     /**
-     * @notice Test de max mint respetando TVL
-     * @dev Comprueba que la función devuelva el MAX_TVL (en shares)
+     * @notice Max mint respecting TVL test
+     * @dev Checks that the function returns MAX_TVL (in shares)
      */
     function test_MaxMint_RespectsMaxTVL() public view {
-        // Comprueba que el máximo mint permitido sea el TVL configurado
+        // Checks that the maximum allowed mint is the configured TVL
         assertEq(vault.maxMint(alice), MAX_TVL);
     }
 
     /**
-     * @notice Test de maxDeposit tras deposito parcial
-     * @dev Comprueba que maxDeposit devuelva el espacio restante aproximado
-     *      Usa approx porque aToken rebase puede incrementar ligeramente totalAssets
+     * @notice maxDeposit after partial deposit test
+     * @dev Checks that maxDeposit returns the approximate remaining space
+     *      Uses approx because aToken rebase can slightly increase totalAssets
      */
     function test_MaxDeposit_AfterPartialDeposit() public {
         _deposit(alice, 100 ether);
-        // Tolerancia de 0.1% porque aToken rebase y redondeo en allocation pueden causar
-        // que totalAssets difiera ligeramente del monto depositado
+        // 0.1% tolerance because aToken rebase and rounding in allocation can cause
+        // totalAssets to differ slightly from the deposited amount
         assertApproxEqRel(vault.maxDeposit(alice), MAX_TVL - 100 ether, 0.001e18);
     }
 
     /**
-     * @notice Test de maxDeposit/maxMint devuelven 0 cuando el vault está pausado
+     * @notice maxDeposit/maxMint return 0 when vault is paused test
      */
     function test_MaxDeposit_ReturnsZeroWhenPaused() public {
         vault.pause();
@@ -457,17 +457,17 @@ contract VaultTest is Test {
         assertEq(vault.maxMint(alice), 0);
     }
 
-    //* Testing de funcionalidad only owner
+    //* Owner-only functionality tests
 
     /**
-     * @notice Test de permisos de administrador
-     * @dev Comprueba que solo el owner pueda cambiar parámetros y otros fallen
+     * @notice Admin permissions test
+     * @dev Checks that only the owner can change parameters and others fail
      */
     function test_Admin_OnlyOwnerCanSetParams() public {
-        // Intenta ejecutar setters como Alice (no owner)
+        // Attempts to execute setters as Alice (not owner)
         vm.startPrank(alice);
 
-        // Espera reverts en todas las llamadas administrativas
+        // Expects reverts on all admin calls
         vm.expectRevert();
         vault.setIdleThreshold(20 ether);
         vm.expectRevert();
@@ -488,7 +488,7 @@ contract VaultTest is Test {
         vault.pause();
         vm.stopPrank();
 
-        // Ejecuta setters como Owner (deberían funcionar)
+        // Executes setters as Owner (should work)
         vault.setIdleThreshold(20 ether);
         vault.setMaxTVL(2000 ether);
         vault.setMinDeposit(0.1 ether);
@@ -500,7 +500,7 @@ contract VaultTest is Test {
         vault.pause();
         vault.unpause();
 
-        // Comprueba que los valores se hayan actualizado correctamente
+        // Checks that values were updated correctly
         assertEq(vault.idle_threshold(), 20 ether);
         assertEq(vault.max_tvl(), 2000 ether);
         assertEq(vault.min_deposit(), 0.1 ether);
@@ -512,35 +512,35 @@ contract VaultTest is Test {
         assertEq(vault.keeper_incentive(), 200);
     }
 
-    //* Testing de harvest y distribución de fees
+    //* Harvest and fee distribution tests
 
     /**
-     * @notice Test harvest con keeper externo (debe recibir incentivo)
-     * @dev Inyecta AAVE reward tokens en la estrategia para simular yield acumulado,
-     *      ya que skip(7 days) en un fork estático no genera rewards reales
+     * @notice Harvest with external keeper test (must receive incentive)
+     * @dev Injects AAVE reward tokens into the strategy to simulate accumulated yield,
+     *      since skip(7 days) on a static fork does not generate real rewards
      */
     function test_HarvestWithExternalKeeper() public {
-        // Setup: depositar suficiente para que se allocate a estrategias
+        // Setup: deposit enough so that it gets allocated to strategies
         _deposit(alice, 100 ether);
 
-        // Bajar min_profit_for_harvest para que cualquier profit pase el threshold
+        // Lower min_profit_for_harvest so any profit passes the threshold
         vault.setMinProfitForHarvest(0);
 
-        // Simular rewards: deal AAVE tokens a la estrategia para que harvest los swapee
+        // Simulate rewards: deal AAVE tokens to the strategy so harvest swaps them
         deal(AAVE_TOKEN, address(aave_strategy), 1 ether);
 
-        // Avanzar tiempo para que Aave acumule algo de yield en aToken rebase
+        // Advance time so Aave accumulates some yield in aToken rebase
         skip(7 days);
         vm.roll(block.number + 50400);
 
-        // Keeper externo ejecuta harvest
+        // External keeper executes harvest
         address keeper = makeAddr("keeper");
         uint256 keeper_balance_before = IERC20(WETH).balanceOf(keeper);
 
         vm.prank(keeper);
         uint256 profit = vault.harvest();
 
-        // Si hay profit, verificar que el keeper recibió su incentivo
+        // If there is profit, verify that the keeper received their incentive
         if (profit > 0) {
             uint256 keeper_balance_after = IERC20(WETH).balanceOf(keeper);
             uint256 keeper_reward = keeper_balance_after - keeper_balance_before;
@@ -551,71 +551,71 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test harvest con keeper oficial (NO debe recibir incentivo)
-     * @dev Inyecta AAVE reward tokens para simular yield y verifica que keeper oficial no cobra
+     * @notice Harvest with official keeper test (must NOT receive incentive)
+     * @dev Injects AAVE reward tokens to simulate yield and verifies official keeper does not charge
      */
     function test_HarvestWithOfficialKeeper() public {
-        // Setup: depositar suficiente para allocation
+        // Setup: deposit enough for allocation
         _deposit(alice, 100 ether);
 
-        // Bajar min_profit_for_harvest y simular rewards
+        // Lower min_profit_for_harvest and simulate rewards
         vault.setMinProfitForHarvest(0);
         deal(AAVE_TOKEN, address(aave_strategy), 1 ether);
 
         skip(7 days);
         vm.roll(block.number + 50400);
 
-        // Configurar keeper oficial
+        // Configure official keeper
         address official_keeper = makeAddr("official");
         vault.setOfficialKeeper(official_keeper, true);
 
-        // Keeper oficial ejecuta harvest
+        // Official keeper executes harvest
         uint256 keeper_balance_before = IERC20(WETH).balanceOf(official_keeper);
 
         vm.prank(official_keeper);
         vault.harvest();
 
-        // Verificar que NO recibió incentivo
+        // Verify that they did NOT receive an incentive
         uint256 keeper_balance_after = IERC20(WETH).balanceOf(official_keeper);
         assertEq(keeper_balance_after, keeper_balance_before, "Keeper oficial no debe recibir incentivo");
     }
 
     /**
-     * @notice Test distribucion de fees: treasury recibe shares, founder recibe assets
-     * @dev Inyecta AAVE reward tokens para simular yield real y verificar fee distribution
+     * @notice Fee distribution test: treasury receives shares, founder receives assets
+     * @dev Injects AAVE reward tokens to simulate real yield and verify fee distribution
      */
     function test_FeeDistribution() public {
         address treasury = vault.treasury_address();
         address _founder = vault.founder_address();
 
-        // Setup: depositar suficiente para allocation
+        // Setup: deposit enough for allocation
         _deposit(alice, 100 ether);
 
-        // Bajar min_profit_for_harvest y simular rewards
+        // Lower min_profit_for_harvest and simulate rewards
         vault.setMinProfitForHarvest(0);
         deal(AAVE_TOKEN, address(aave_strategy), 1 ether);
 
         skip(7 days);
         vm.roll(block.number + 50400);
 
-        // Balances antes de harvest
+        // Balances before harvest
         uint256 treasury_shares_before = vault.balanceOf(treasury);
         uint256 founder_weth_before = IERC20(WETH).balanceOf(_founder);
 
-        // Harvest como keeper oficial (sin incentivo para simplificar math)
+        // Harvest as official keeper (no incentive to simplify math)
         vault.setOfficialKeeper(address(this), true);
         uint256 profit = vault.harvest();
 
-        // Solo verificar distribución si hubo profit
+        // Only verify distribution if there was profit
         if (profit > 0) {
-            // Verificar: treasury recibió SHARES, founder recibió WETH
+            // Verify: treasury received SHARES, founder received WETH
             uint256 treasury_shares_after = vault.balanceOf(treasury);
             uint256 founder_weth_after = IERC20(WETH).balanceOf(_founder);
 
             assertGt(treasury_shares_after, treasury_shares_before, "Treasury debe recibir shares");
             assertGt(founder_weth_after, founder_weth_before, "Founder debe recibir WETH");
 
-            // Verificar splits correctos
+            // Verify correct splits
             uint256 perf_fee = (profit * vault.performance_fee()) / vault.BASIS_POINTS();
             uint256 expected_treasury = (perf_fee * vault.treasury_split()) / vault.BASIS_POINTS();
             uint256 expected_founder = (perf_fee * vault.founder_split()) / vault.BASIS_POINTS();
@@ -633,11 +633,11 @@ contract VaultTest is Test {
         }
     }
 
-    //* Testing de validación de setters (error paths para coverage)
+    //* Setter validation tests (error paths for coverage)
 
     /**
-     * @notice Test de setPerformanceFee con valor > BASIS_POINTS
-     * @dev Comprueba que se revierte con error esperado
+     * @notice setPerformanceFee with value > BASIS_POINTS test
+     * @dev Checks it reverts with the expected error
      */
     function test_SetPerformanceFee_RevertExceedsBasisPoints() public {
         vm.expectRevert(Vault.Vault__InvalidPerformanceFee.selector);
@@ -645,8 +645,8 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test de setFeeSplit con splits que no suman BASIS_POINTS
-     * @dev Comprueba que se revierte con error esperado
+     * @notice setFeeSplit with splits that don't sum to BASIS_POINTS test
+     * @dev Checks it reverts with the expected error
      */
     function test_SetFeeSplit_RevertInvalidSum() public {
         vm.expectRevert(Vault.Vault__InvalidFeeSplit.selector);
@@ -654,8 +654,8 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test de setTreasury con address(0)
-     * @dev Comprueba que se revierte con error esperado
+     * @notice setTreasury with address(0) test
+     * @dev Checks it reverts with the expected error
      */
     function test_SetTreasury_RevertZeroAddress() public {
         vm.expectRevert(Vault.Vault__InvalidTreasuryAddress.selector);
@@ -663,8 +663,8 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test de setFounder con address(0)
-     * @dev Comprueba que se revierte con error esperado
+     * @notice setFounder with address(0) test
+     * @dev Checks it reverts with the expected error
      */
     function test_SetFounder_RevertZeroAddress() public {
         vm.expectRevert(Vault.Vault__InvalidFounderAddress.selector);
@@ -672,8 +672,8 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test de setStrategyManager con address(0)
-     * @dev Comprueba que se revierte con error esperado
+     * @notice setStrategyManager with address(0) test
+     * @dev Checks it reverts with the expected error
      */
     function test_SetStrategyManager_RevertZeroAddress() public {
         vm.expectRevert(Vault.Vault__InvalidStrategyManagerAddress.selector);
@@ -681,18 +681,18 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test de setKeeperIncentive con valor > BASIS_POINTS
-     * @dev Comprueba que se revierte con error esperado
+     * @notice setKeeperIncentive with value > BASIS_POINTS test
+     * @dev Checks it reverts with the expected error
      */
     function test_SetKeeperIncentive_RevertExceedsBasisPoints() public {
         vm.expectRevert(Vault.Vault__InvalidPerformanceFee.selector);
         vault.setKeeperIncentive(10001);
     }
 
-    //* Testing de constructor validations
+    //* Constructor validation tests
 
     /**
-     * @notice Test constructor con strategy manager address(0)
+     * @notice Constructor with strategy manager address(0) test
      */
     function test_Constructor_RevertInvalidStrategyManager() public {
         vm.expectRevert(Vault.Vault__InvalidStrategyManagerAddress.selector);
@@ -706,7 +706,7 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test constructor con treasury address(0)
+     * @notice Constructor with treasury address(0) test
      */
     function test_Constructor_RevertInvalidTreasury() public {
         vm.expectRevert(Vault.Vault__InvalidTreasuryAddress.selector);
@@ -720,7 +720,7 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test constructor con founder address(0)
+     * @notice Constructor with founder address(0) test
      */
     function test_Constructor_RevertInvalidFounder() public {
         vm.expectRevert(Vault.Vault__InvalidFounderAddress.selector);
@@ -733,24 +733,24 @@ contract VaultTest is Test {
         );
     }
 
-    //* Testing de harvest edge cases
+    //* Harvest edge case tests
 
     /**
-     * @notice Test harvest sin profit (debe retornar 0)
-     * @dev Sin rewards inyectadas, harvest devuelve 0 profit
+     * @notice Harvest with no profit test (must return 0)
+     * @dev Without injected rewards, harvest returns 0 profit
      */
     function test_Harvest_ZeroProfit() public {
-        // Depositar para que haya algo en estrategias
+        // Deposit so there is something in strategies
         _deposit(alice, 20 ether);
 
-        // Harvest sin simular rewards - debe retornar 0
+        // Harvest without simulating rewards - must return 0
         uint256 profit = vault.harvest();
         assertEq(profit, 0, "Sin rewards, harvest debe retornar 0");
     }
 
     /**
-     * @notice Test harvest cuando el vault está pausado
-     * @dev Comprueba que se revierte
+     * @notice Harvest when vault is paused test
+     * @dev Checks it reverts
      */
     function test_Harvest_RevertWhenPaused() public {
         _deposit(alice, 5 ether);
@@ -761,8 +761,8 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test allocateIdle cuando el vault está pausado
-     * @dev Comprueba que se revierte
+     * @notice allocateIdle when vault is paused test
+     * @dev Checks it reverts
      */
     function test_AllocateIdle_RevertWhenPaused() public {
         _deposit(alice, 5 ether);
@@ -772,14 +772,14 @@ contract VaultTest is Test {
         vault.allocateIdle();
     }
 
-    //* Testing de mint edge cases
+    //* Mint edge case tests
 
     /**
-     * @notice Test de mint que excede el max TVL
-     * @dev Comprueba que se revierte con error esperado
+     * @notice Mint that exceeds max TVL test
+     * @dev Checks it reverts with the expected error
      */
     function test_Mint_RevertExceedsMaxTVL() public {
-        // Intentar mintear shares equivalentes a más del max TVL
+        // Attempt to mint shares equivalent to more than the max TVL
         deal(WETH, alice, MAX_TVL + 1 ether);
         vm.startPrank(alice);
         IERC20(WETH).approve(address(vault), MAX_TVL + 1 ether);
@@ -791,8 +791,8 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test de mint que triggerea allocation
-     * @dev Deposita via mint suficiente para superar idle threshold
+     * @notice Mint that triggers allocation test
+     * @dev Deposits via mint enough to exceed the idle threshold
      */
     function test_Mint_TriggersAllocation() public {
         uint256 threshold = vault.idle_threshold();
@@ -804,16 +804,16 @@ contract VaultTest is Test {
 
         vm.stopPrank();
 
-        // Idle buffer debe estar vacío porque se allocó
+        // Idle buffer must be empty because it was allocated
         assertEq(vault.idle_buffer(), 0);
         assertGt(manager.totalAssets(), 0);
     }
 
-    //* Testing de withdraw edge cases
+    //* Withdraw edge case tests
 
     /**
-     * @notice Test de retiro completo de todos los fondos
-     * @dev Comprueba que se pueda retirar todo y el vault quede vacío
+     * @notice Full withdrawal of all funds test
+     * @dev Checks that everything can be withdrawn and the vault is left empty
      */
     function test_Withdraw_FullAmount() public {
         uint256 amount = 5 ether;
@@ -825,11 +825,11 @@ contract VaultTest is Test {
         assertEq(vault.totalAssets(), 0);
     }
 
-    //* Testing de getters para coverage
+    //* Getter tests for coverage
 
     /**
-     * @notice Test de todos los getters del vault
-     * @dev Comprueba que devuelvan los valores correctos post-setup
+     * @notice All vault getters test
+     * @dev Checks they return the correct values post-setup
      */
     function test_Getters_ReturnCorrectValues() public view {
         assertEq(vault.performanceFee(), 2000);
@@ -849,53 +849,53 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test de retiro desde estrategias cuando el vault está pausado
-     * @dev Verifica que el withdraw funciona incluso con fondos en estrategias, no solo desde idle
+     * @notice Withdraw from strategies when vault is paused test
+     * @dev Verifies that withdraw works even with funds in strategies, not only from idle
      */
     function test_Withdraw_FromStrategiesWhenPaused() public {
-        // Deposita suficiente para que se alloce en estrategias (supera idle threshold)
+        // Deposits enough so it gets allocated in strategies (exceeds idle threshold)
         _deposit(alice, 20 ether);
 
-        // Pausa el vault
+        // Pauses the vault
         vault.pause();
 
-        // Top-up vault para cubrir slippage (mismo pattern que _withdraw helper)
+        // Top-up vault to cover slippage (same pattern as _withdraw helper)
         deal(WETH, address(vault), IERC20(WETH).balanceOf(address(vault)) + 15 ether);
 
-        // Withdraw debe funcionar incluso pausado, retirando desde estrategias
+        // Withdraw must work even when paused, withdrawing from strategies
         vm.prank(alice);
         vault.withdraw(15 ether, alice, alice);
 
-        // Comprueba que Alice recibió aproximadamente lo esperado (tolerancia 1% por slippage)
+        // Checks that Alice received approximately the expected amount (1% tolerance for slippage)
         assertApproxEqRel(IERC20(WETH).balanceOf(alice), 15 ether, 0.01e18);
     }
 
-    //* Testing de redeem cuando el vault está pausado
+    //* Redeem tests when vault is paused
 
     /**
-     * @notice Test de redeem cuando el vault está pausado
-     * @dev Tras el cambio de emergency exit, redeem funciona con vault pausado.
-     *      Un usuario siempre debe poder retirar sus fondos
+     * @notice Redeem when vault is paused test
+     * @dev After the emergency exit change, redeem works with vault paused.
+     *      A user must always be able to withdraw their funds
      */
     function test_Redeem_WorksWhenPaused() public {
         uint256 shares = _deposit(alice, 5 ether);
         vault.pause();
 
-        // Redeem debe ejecutarse correctamente estando pausado
+        // Redeem must execute correctly while paused
         vm.prank(alice);
         uint256 assets = vault.redeem(shares, alice, alice);
 
-        // Comprueba que Alice recibió sus assets y sus shares fueron quemadas
+        // Checks that Alice received her assets and her shares were burned
         assertEq(assets, 5 ether);
         assertEq(IERC20(WETH).balanceOf(alice), 5 ether);
         assertEq(vault.balanceOf(alice), 0);
     }
 
-    //* Testing de mint cuando el vault está pausado
+    //* Mint tests when vault is paused
 
     /**
-     * @notice Test de mint cuando el vault está pausado
-     * @dev Comprueba que se revierte con error esperado
+     * @notice Mint when vault is paused test
+     * @dev Checks it reverts with the expected error
      */
     function test_Mint_RevertWhenPaused() public {
         vault.pause();
@@ -910,11 +910,11 @@ contract VaultTest is Test {
         vm.stopPrank();
     }
 
-    //* Testing de syncIdleBuffer
+    //* syncIdleBuffer tests
 
     /**
-     * @notice Test de syncIdleBuffer por non-owner
-     * @dev Comprueba que solo el owner pueda llamar syncIdleBuffer
+     * @notice syncIdleBuffer by non-owner test
+     * @dev Checks that only the owner can call syncIdleBuffer
      */
     function test_SyncIdleBuffer_RevertIfNotOwner() public {
         vm.prank(alice);
@@ -923,41 +923,41 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test de syncIdleBuffer tras recibir WETH externo
-     * @dev Simula el escenario post-emergencyExit: el vault recibe WETH directamente
-     *      sin pasar por deposit(), desincronizando idle_buffer
+     * @notice syncIdleBuffer after receiving external WETH test
+     * @dev Simulates the post-emergencyExit scenario: the vault receives WETH directly
+     *      without going through deposit(), desynchronizing idle_buffer
      */
     function test_SyncIdleBuffer_UpdatesAfterExternalTransfer() public {
-        // Deposita 5 WETH (se queda en idle)
+        // Deposits 5 WETH (stays in idle)
         _deposit(alice, 5 ether);
         assertEq(vault.idle_buffer(), 5 ether);
 
-        // Simula emergencyExit: el vault recibe WETH directamente sin pasar por deposit
+        // Simulates emergencyExit: the vault receives WETH directly without going through deposit
         deal(WETH, address(vault), 15 ether);
 
-        // idle_buffer sigue en 5 ETH (desincronizado)
+        // idle_buffer is still at 5 ETH (desynchronized)
         assertEq(vault.idle_buffer(), 5 ether);
 
-        // Sincroniza
+        // Synchronizes
         vault.syncIdleBuffer();
 
-        // Ahora idle_buffer refleja el balance real
+        // Now idle_buffer reflects the real balance
         assertEq(vault.idle_buffer(), 15 ether);
         assertEq(vault.idle_buffer(), IERC20(WETH).balanceOf(address(vault)));
     }
 
     /**
-     * @notice Test de syncIdleBuffer emite evento con valores correctos
-     * @dev Verifica que el evento IdleBufferSynced tenga old_buffer y new_buffer correctos
+     * @notice syncIdleBuffer emits event with correct values test
+     * @dev Verifies that the IdleBufferSynced event has correct old_buffer and new_buffer
      */
     function test_SyncIdleBuffer_EmitsEvent() public {
-        // Deposita 3 WETH (idle_buffer = 3 ETH)
+        // Deposits 3 WETH (idle_buffer = 3 ETH)
         _deposit(alice, 3 ether);
 
-        // Simula recepcion directa de 7 WETH adicionales
+        // Simulates direct reception of 7 additional WETH
         deal(WETH, address(vault), 10 ether);
 
-        // Espera evento con old=3, new=10
+        // Expects event with old=3, new=10
         vm.expectEmit(false, false, false, true);
         emit IVault.IdleBufferSynced(3 ether, 10 ether);
 
@@ -965,32 +965,32 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test de idempotencia de syncIdleBuffer
-     * @dev Llamar dos veces seguidas con el mismo balance produce el mismo resultado
+     * @notice syncIdleBuffer idempotency test
+     * @dev Calling twice in a row with the same balance produces the same result
      */
     function test_SyncIdleBuffer_Idempotent() public {
-        // Deposita y simula transferencia directa
+        // Deposits and simulates direct transfer
         _deposit(alice, 5 ether);
         deal(WETH, address(vault), 20 ether);
 
-        // Primera sincronizacion
+        // First sync
         vault.syncIdleBuffer();
         uint256 buffer_after_first = vault.idle_buffer();
 
-        // Segunda sincronizacion (sin cambios en balance)
+        // Second sync (no changes in balance)
         vault.syncIdleBuffer();
         uint256 buffer_after_second = vault.idle_buffer();
 
-        // Ambas producen el mismo resultado
+        // Both produce the same result
         assertEq(buffer_after_first, buffer_after_second);
         assertEq(buffer_after_second, 20 ether);
     }
 
-    //* Testing de setters que actualizan correctamente
+    //* Setter tests that update correctly
 
     /**
-     * @notice Test de setTreasury y setFounder con valores válidos
-     * @dev Comprueba que se actualicen correctamente las direcciones
+     * @notice setTreasury and setFounder with valid values test
+     * @dev Checks that the addresses are updated correctly
      */
     function test_SetTreasuryAndFounder_Valid() public {
         address new_treasury = makeAddr("new_treasury");
@@ -1004,8 +1004,8 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test de setStrategyManager con valor válido
-     * @dev Comprueba que se actualice correctamente
+     * @notice setStrategyManager with valid value test
+     * @dev Checks it is updated correctly
      */
     function test_SetStrategyManager_Valid() public {
         address new_manager = makeAddr("new_manager");
@@ -1014,17 +1014,17 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test de withdraw con allowance (caller != owner)
-     * @dev Comprueba el path de _spendAllowance en _withdraw
+     * @notice Withdraw with allowance (caller != owner) test
+     * @dev Checks the _spendAllowance path in _withdraw
      */
     function test_Withdraw_WithAllowance() public {
         _deposit(alice, 5 ether);
 
-        // Alice aprueba a Bob para gastar sus shares
+        // Alice approves Bob to spend her shares
         vm.prank(alice);
         vault.approve(bob, type(uint256).max);
 
-        // Bob retira en nombre de Alice
+        // Bob withdraws on behalf of Alice
         vm.prank(bob);
         vault.withdraw(2 ether, bob, alice);
 
@@ -1032,49 +1032,49 @@ contract VaultTest is Test {
     }
 
     /**
-     * @notice Test de maxDeposit cuando TVL está al máximo
-     * @dev Debe devolver ~0 cuando current >= max_tvl
-     *      aToken rebase puede causar totalAssets ligeramente > depositado, así que
-     *      verificamos que sea prácticamente 0 (< 10 wei)
+     * @notice maxDeposit when TVL is at maximum test
+     * @dev Must return ~0 when current >= max_tvl
+     *      aToken rebase can cause totalAssets to be slightly > deposited, so
+     *      we verify it is practically 0 (< 10 wei)
      */
     function test_MaxDeposit_ReturnsZeroAtCapacity() public {
-        // Setear max TVL bajo para poder llenarlo
+        // Set low max TVL so we can fill it
         vault.setMaxTVL(20 ether);
         _deposit(alice, 20 ether);
 
-        // La distribución proporcional entre estrategias puede perder algunos wei por redondeo,
-        // dejando totalAssets ligeramente por debajo de max_tvl. Tolerancia de 0.1% del TVL
+        // Proportional distribution between strategies can lose a few wei by rounding,
+        // leaving totalAssets slightly below max_tvl. Tolerance of 0.1% of TVL
         assertLe(vault.maxDeposit(alice), 20 ether / 1000, "maxDeposit debe ser ~0 al capacity");
         assertLe(vault.maxMint(alice), 20 ether / 1000, "maxMint debe ser ~0 al capacity");
     }
 
-    //* Testing del flujo de emergencia completo end-to-end
+    //* Emergency flow end-to-end tests
 
     /**
-     * @notice Test end-to-end del flujo de emergencia: pause → emergencyExit → syncIdleBuffer → redeem
-     * @dev Simula el escenario completo:
-     *      1. Usuarios depositan → fondos se allocan en estrategias
-     *      2. Owner detecta bug → pause()
-     *      3. Owner ejecuta emergencyExit() → fondos vuelven al vault
-     *      4. Owner ejecuta syncIdleBuffer() → idle_buffer refleja el balance real
-     *      5. Usuarios hacen redeem() → reciben sus fondos correctamente
-     *      6. El vault queda vacio al final
+     * @notice End-to-end emergency flow test: pause → emergencyExit → syncIdleBuffer → redeem
+     * @dev Simulates the complete scenario:
+     *      1. Users deposit → funds get allocated in strategies
+     *      2. Owner detects bug → pause()
+     *      3. Owner executes emergencyExit() → funds return to vault
+     *      4. Owner executes syncIdleBuffer() → idle_buffer reflects the real balance
+     *      5. Users do redeem() → receive their funds correctly
+     *      6. The vault is left empty at the end
      */
     function test_EmergencyFlow_EndToEnd() public {
-        // --- PASO 1: Usuarios depositan fondos que se allocan en estrategias ---
+        // --- STEP 1: Users deposit funds that get allocated in strategies ---
         uint256 alice_deposit = 50 ether;
         uint256 bob_deposit = 30 ether;
 
         uint256 alice_shares = _deposit(alice, alice_deposit);
         uint256 bob_shares = _deposit(bob, bob_deposit);
 
-        // Verifica que hay fondos en las estrategias (al menos una parte)
-        assertGt(manager.totalAssets(), 0, "Debe haber fondos en estrategias");
+        // Verifies there are funds in strategies (at least partially)
+        assertGt(manager.totalAssets(), 0, "Should have funds in strategies");
 
-        // --- PASO 2: Owner detecta bug y pausa el vault ---
+        // --- STEP 2: Owner detects bug and pauses the vault ---
         vault.pause();
 
-        // Verifica que deposit no funciona pausado
+        // Verifies that deposit does not work when paused
         deal(WETH, alice, 1 ether);
         vm.startPrank(alice);
         IERC20(WETH).approve(address(vault), 1 ether);
@@ -1082,42 +1082,42 @@ contract VaultTest is Test {
         vault.deposit(1 ether, alice);
         vm.stopPrank();
 
-        // --- PASO 3: Owner ejecuta emergencyExit ---
+        // --- STEP 3: Owner executes emergencyExit ---
         manager.emergencyExit();
 
-        // Verifica que las estrategias quedaron vacias
-        assertApproxEqAbs(manager.totalAssets(), 0, 20, "Estrategias deben quedar vacias");
+        // Verifies that strategies were left empty
+        assertApproxEqAbs(manager.totalAssets(), 0, 20, "Strategies should be empty");
 
-        // --- PASO 4: Owner sincroniza idle_buffer ---
+        // --- STEP 4: Owner syncs idle_buffer ---
         vault.syncIdleBuffer();
 
-        // Verifica que totalAssets refleja el balance real
+        // Verifies that totalAssets reflects the real balance
         uint256 vault_weth = IERC20(WETH).balanceOf(address(vault));
         assertEq(vault.idle_buffer(), vault_weth, "idle_buffer debe coincidir con balance WETH real");
 
         // totalAssets = idle_buffer + manager.totalAssets() ≈ idle_buffer + 0
         assertApproxEqAbs(vault.totalAssets(), vault_weth, 20, "totalAssets debe ser ~WETH balance");
 
-        // --- PASO 5: Usuarios hacen withdraw estando pausado ---
-        // Tras emergencyExit puede quedar dust (1-2 wei) en estrategias por redondeo de
-        // wstETH/stETH. Usamos withdraw (no redeem) con cantidades que el idle_buffer
-        // puede cubrir, evitando que _withdraw intente sacar dust de una estrategia vacia
+        // --- STEP 5: Users withdraw while paused ---
+        // After emergencyExit there may be dust (1-2 wei) in strategies due to rounding in
+        // wstETH/stETH. We use withdraw (not redeem) with amounts the idle_buffer
+        // can cover, avoiding _withdraw from trying to pull dust from an empty strategy
         uint256 alice_assets = vault.previewRedeem(alice_shares);
         uint256 bob_assets = vault.previewRedeem(bob_shares);
 
-        // Retira desde idle solamente: restamos el dust proporcional de estrategias
-        // Para evitar que from_strategies > 0, retiramos como maximo idle_buffer proporcional
+        // Withdraw from idle only: subtract proportional strategy dust
+        // To avoid from_strategies > 0, we withdraw at most proportional idle_buffer
         uint256 idle = vault.idle_buffer();
         uint256 total = vault.totalAssets();
 
-        // Calcula la parte de idle que le corresponde a cada usuario (proporcional a sus assets)
+        // Calculate the idle portion belonging to each user (proportional to their assets)
         uint256 alice_from_idle = (idle * alice_assets) / total;
         uint256 bob_from_idle = (idle * bob_assets) / total;
 
         vm.prank(alice);
         uint256 alice_received = vault.withdraw(alice_from_idle, alice, alice);
 
-        // Recalcula idle/total tras el withdraw de alice
+        // Recalculate idle/total after alice's withdrawal
         idle = vault.idle_buffer();
         total = vault.totalAssets();
         bob_from_idle = (idle * bob_assets) / total;
@@ -1125,11 +1125,11 @@ contract VaultTest is Test {
         vm.prank(bob);
         uint256 bob_received = vault.withdraw(bob_from_idle, bob, bob);
 
-        // Verifican que recibieron ~lo esperado (tolerancia 1% por slippage en conversiones)
-        assertApproxEqRel(alice_received, alice_deposit, 0.01e18, "Alice debe recibir ~su deposito");
-        assertApproxEqRel(bob_received, bob_deposit, 0.01e18, "Bob debe recibir ~su deposito");
+        // Verify they received approximately what was expected (1% tolerance for conversion slippage)
+        assertApproxEqRel(alice_received, alice_deposit, 0.01e18, "Alice should receive ~her deposit");
+        assertApproxEqRel(bob_received, bob_deposit, 0.01e18, "Bob should receive ~his deposit");
 
-        // --- PASO 6: El vault queda casi vacio (puede quedar dust de estrategias + shares residuales) ---
-        assertApproxEqAbs(vault.totalAssets(), 0, 1 ether, "Vault debe quedar ~vacio");
+        // --- STEP 6: The vault is left almost empty (may have strategy dust + residual shares) ---
+        assertApproxEqAbs(vault.totalAssets(), 0, 1 ether, "Vault should be ~empty");
     }
 }

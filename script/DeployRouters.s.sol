@@ -7,13 +7,13 @@ import {Router} from "../src/periphery/Router.sol";
 /**
  * @title DeployRouters
  * @author cristianrisueo
- * @notice Script de deployment de los dos Routers periféricos de VynX V2
- * @dev Despliega un Router por cada vault (Balanced y Aggressive)
+ * @notice Deployment script for the two VynX V1 peripheral Routers
+ * @dev Deploys one Router per vault (Balanced and Aggressive)
  *
- * El Router es stateless: vault es immutable, por lo que se necesita
- * una instancia por vault.
+ * The Router is stateless: vault is immutable, so one instance
+ * per vault is needed.
  *
- * Uso:
+ * Usage:
  *   forge script script/DeployRouters.s.sol \
  *     --rpc-url $MAINNET_RPC_URL \
  *     --private-key $PRIVATE_KEY \
@@ -33,16 +33,16 @@ contract DeployRouters is Script {
     function run() external {
         vm.startBroadcast();
 
-        // Router para el tier Balanced (Lido + Aave wstETH + Curve)
+        // Router for the Balanced tier (Lido + Aave wstETH + Curve)
         Router router_balanced = new Router(WETH, VAULT_BALANCED, UNISWAP_ROUTER);
 
-        // Router para el tier Aggressive (Curve + Uniswap V3)
+        // Router for the Aggressive tier (Curve + Uniswap V3)
         Router router_aggressive = new Router(WETH, VAULT_AGGRESSIVE, UNISWAP_ROUTER);
 
         vm.stopBroadcast();
 
-        // Log de addresses deployadas
-        console.log("=== VynX V2 Routers ===");
+        // Log deployed addresses
+        console.log("=== VynX V1 Routers ===");
         console.log("Router Balanced:   ", address(router_balanced));
         console.log("Router Aggressive: ", address(router_aggressive));
     }

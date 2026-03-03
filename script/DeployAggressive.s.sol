@@ -12,15 +12,15 @@ import {UniswapV3Strategy} from "../src/strategies/UniswapV3Strategy.sol";
 /**
  * @title DeployAggressive
  * @author cristianrisueo
- * @notice Script de deployment del tier Aggressive de VynX V2
- * @dev Despliega: StrategyManager + CurveStrategy + UniswapV3Strategy + Vault
+ * @notice Deployment script for the VynX V1 Aggressive tier
+ * @dev Deploys: StrategyManager + CurveStrategy + UniswapV3Strategy + Vault
  *
- * Tier Aggressive:
- *   - Estrategias: Curve (stETH/ETH LP) + Uniswap V3 (WETH/USDC LP concentrado)
- *   - Allocations: max 70% por estrategia, min 10%
+ * Aggressive Tier:
+ *   - Strategies: Curve (stETH/ETH LP) + Uniswap V3 (WETH/USDC concentrated LP)
+ *   - Allocations: max 70% per strategy, min 10%
  *   - Rebalance: threshold 3%, min TVL 12 ETH
  *
- * Uso:
+ * Usage:
  *   forge script script/DeployAggressive.s.sol --rpc-url $MAINNET_RPC_URL --broadcast
  */
 contract DeployAggressive is Script {
@@ -38,17 +38,17 @@ contract DeployAggressive is Script {
     address constant WETH_USDC_POOL = 0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640;
 
     function run() external {
-        // Lee treasury y founder desde variables de entorno
+        // Read treasury and founder from environment variables
         address treasury = vm.envAddress("TREASURY_ADDRESS");
         address founder = vm.envAddress("FOUNDER_ADDRESS");
 
-        // Validacion explicita: revierte con mensaje claro si no estan seteadas
+        // Explicit validation: reverts with clear message if not set
         require(treasury != address(0), "DeployAggressive: TREASURY_ADDRESS no seteada");
         require(founder != address(0), "DeployAggressive: FOUNDER_ADDRESS no seteada");
 
         vm.startBroadcast();
 
-        // 1. Despliega StrategyManager (necesita existir antes que las estrategias)
+        // 1. Deploy StrategyManager (must exist before strategies)
         StrategyManager manager = new StrategyManager(
             WETH,
             IStrategyManager.TierConfig({
@@ -59,7 +59,7 @@ contract DeployAggressive is Script {
             })
         );
 
-        // 2. Despliega las 2 estrategias (necesitan address del manager)
+        // 2. Deploy 2 strategies (they need the manager address)
         CurveStrategy curve_strat = new CurveStrategy(
             address(manager),
             STETH, // lido (stETH para submit)
@@ -75,7 +75,7 @@ contract DeployAggressive is Script {
         UniswapV3Strategy uni_strat =
             new UniswapV3Strategy(address(manager), UNI_POS_MGR, UNI_ROUTER, WETH_USDC_POOL, WETH, USDC);
 
-        // 3. Despliega Vault (necesita address del manager)
+        // 3. Deploy Vault (needs manager address)
         Vault vault = new Vault(
             WETH,
             address(manager),
@@ -89,17 +89,17 @@ contract DeployAggressive is Script {
             })
         );
 
-        // 4. Resuelve la dependencia circular: conecta el vault al manager
+        // 4. Resolves circular dependency: connects vault to manager
         manager.initialize(address(vault));
 
-        // 5. Registra las 2 estrategias en el manager
+        // 5. Registers 2 strategies in manager
         manager.addStrategy(address(curve_strat));
         manager.addStrategy(address(uni_strat));
 
         vm.stopBroadcast();
 
-        // Log de addresses deployadas
-        console.log("=== VynX V2 Aggressive Tier ===");
+        // Log deployed addresses
+        console.log("=== VynX V1 Aggressive Tier ===");
         console.log("StrategyManager:   ", address(manager));
         console.log("Vault:             ", address(vault));
         console.log("CurveStrategy:     ", address(curve_strat));

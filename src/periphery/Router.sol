@@ -11,376 +11,376 @@ import {IRouter} from "../interfaces/periphery/IRouter.sol";
 /**
  * @title Router
  * @author cristianrisueo
- * @notice Contrato periférico que permite depositar cualquier token (ETH, USDC, DAI, etc.) en el Vault de VynX
- * @dev Swapea tokens a WETH vía Uniswap V3 y luego deposita en el Vault
- * @dev Principios de diseño del Router:
- *      - El Vault se mantiene como un ERC4626 puro (solo WETH)
- *      - El Router es un periférico sin estado (no retiene fondos entre transacciones)
- *      - Los usuarios reciben shares del vault directamente (el Router no custodia shares)
- *      - Pool con fee variable especificado por el frontend
- * @dev Características de seguridad:
- *      - ReentrancyGuard en todas las funciones públicas
- *      - Protección ante slippage mediante el parámetro min_weth_out
- *      - Verificación de balance (cumplimiento del diseño sin estado)
- *      - Sin privilegios especiales en el Vault (el Router es un usuario normal)
+ * @notice Peripheral contract that allows depositing any token (ETH, USDC, DAI, etc.) into the VynX Vault
+ * @dev Swaps tokens to WETH via Uniswap V3 and then deposits into the Vault
+ * @dev Router design principles:
+ *      - The Vault stays as a pure ERC4626 (WETH only)
+ *      - The Router is a stateless peripheral (does not retain funds between transactions)
+ *      - Users receive vault shares directly (the Router does not custody shares)
+ *      - Pool with variable fee specified by the frontend
+ * @dev Security features:
+ *      - ReentrancyGuard on all public functions
+ *      - Slippage protection via the min_weth_out parameter
+ *      - Balance verification (stateless design compliance)
+ *      - No special privileges in the Vault (the Router is a normal user)
  */
 contract Router is IRouter, ReentrancyGuard {
     //* library attachments
 
     /**
-     * @notice Usa SafeERC20 para todas las operaciones IERC20 de manera segura
-     * @dev Evita errores comunes con tokens legacy o mal implementados
+     * @notice Uses SafeERC20 for all IERC20 operations safely
+     * @dev Avoids common errors with legacy or poorly implemented tokens
      */
     using SafeERC20 for IERC20;
 
-    //* Errores
+    //* Errors
 
     /**
-     * @notice Error cuando se pasa la dirección cero al constructor
+     * @notice Error when a zero address is passed to the constructor
      */
     error Router__ZeroAddress();
 
     /**
-     * @notice Error al intentar depositar una cantidad de cero
+     * @notice Error when trying to deposit a zero amount
      */
     error Router__ZeroAmount();
 
     /**
-     * @notice Error cuando se activa la protección ante slippage (se recibió menos del mínimo)
+     * @notice Error when slippage protection is triggered (received less than the minimum)
      */
     error Router__SlippageExceeded();
 
     /**
-     * @notice Error cuando la operación de wrap de ETH falla
+     * @notice Error when the ETH wrap operation fails
      */
     error Router__ETHWrapFailed();
 
     /**
-     * @notice Error cuando quedan fondos atrapados en el Router tras la operación (violación del diseño sin estado)
+     * @notice Error when funds get stuck in the Router after the operation (stateless design violation)
      */
     error Router__FundsStuck();
 
     /**
-     * @notice Error cuando el usuario intenta depositar WETH vía Router en vez de directamente en el Vault
+     * @notice Error when the user tries to deposit WETH via Router instead of directly into the Vault
      */
     error Router__UseVaultForWETH();
 
     /**
-     * @notice Error cuando se recibe ETH de una dirección no autorizada (solo el contrato WETH puede enviar ETH)
+     * @notice Error when ETH is received from an unauthorized address (only the WETH contract can send ETH)
      */
     error Router__UnauthorizedETHSender();
 
     /**
-     * @notice Error cuando la operación de unwrap de WETH a ETH falla
+     * @notice Error when the WETH to ETH unwrap operation fails
      */
     error Router__ETHUnwrapFailed();
 
-    //* Eventos: Heredados de la interfaz, no es necesario implementarlos
+    //* Events: Inherited from the interface, no need to implement them
 
-    //* Variables de estado
+    //* State variables
 
-    /// @notice Dirección del token WETH
+    /// @notice Address of the WETH token
     address public immutable weth;
 
-    /// @notice Dirección del Vault de VynX (compatible con ERC4626)
+    /// @notice Address of the VynX Vault (ERC4626 compatible)
     address public immutable vault;
 
-    /// @notice Dirección del SwapRouter de Uniswap V3
+    /// @notice Address of the Uniswap V3 SwapRouter
     address public immutable swap_router;
 
     //* Constructor
 
     /**
-     * @notice Constructor del Router
-     * @dev Inicializa las direcciones inmutables y aprueba la transferencia de WETH al Vault
-     * @param _weth Dirección del token WETH
-     * @param _vault Dirección del Vault de VynX
-     * @param _swap_router Dirección del SwapRouter de Uniswap V3
+     * @notice Router constructor
+     * @dev Initializes the immutable addresses and approves WETH transfer to the Vault
+     * @param _weth Address of the WETH token
+     * @param _vault Address of the VynX Vault
+     * @param _swap_router Address of the Uniswap V3 SwapRouter
      */
     constructor(address _weth, address _vault, address _swap_router) {
-        // Comprueba que las direcciones no sean address(0)
+        // Checks that addresses are not address(0)
         if (_weth == address(0)) revert Router__ZeroAddress();
         if (_vault == address(0)) revert Router__ZeroAddress();
         if (_swap_router == address(0)) revert Router__ZeroAddress();
 
-        // Setea las direcciones
+        // Sets the addresses
         weth = _weth;
         vault = _vault;
         swap_router = _swap_router;
 
-        // Aprueba al vault la transferencia de todo el WETH de este contrato
+        // Approves the vault to transfer all WETH from this contract
         IERC20(_weth).forceApprove(_vault, type(uint256).max);
     }
 
-    //* Funciones principales - Depósitos y retiros de ETH y ERC20
+    //* Main functions - ETH and ERC20 deposits and withdrawals
 
     /**
-     * @notice Deposita ETH nativo en el Vault (hace wrap a WETH primero)
-     * @dev Envuelve ETH a WETH, deposita en el Vault y emite shares a msg.sender
-     * @dev Flujo:
-     *      1. Recibe ETH mediante msg.value
-     *      2. Envuelve ETH a WETH
-     *      3. Deposita WETH en el Vault
-     *      4. El Vault emite shares directamente al usuario
-     * @return shares Cantidad de shares del vault recibidas por el usuario
+     * @notice Deposits native ETH into the Vault (wraps to WETH first)
+     * @dev Wraps ETH to WETH, deposits into the Vault and emits shares to msg.sender
+     * @dev Flow:
+     *      1. Receives ETH via msg.value
+     *      2. Wraps ETH to WETH
+     *      3. Deposits WETH into the Vault
+     *      4. The Vault emits shares directly to the user
+     * @return shares Amount of vault shares received by the user
      */
     function zapDepositETH() external payable nonReentrant returns (uint256 shares) {
-        // Comprueba que msg.value no sea cero
+        // Checks that msg.value is not zero
         if (msg.value == 0) revert Router__ZeroAmount();
 
-        // Envuelve ETH a WETH usando una función interna (aquí el balance ya es WETH 1:1)
+        // Wraps ETH to WETH using an internal function (at this point the balance is already WETH 1:1)
         _wrapETH(msg.value);
 
-        // Deposita WETH en el Vault (minteando las shares al caller, no al router)
+        // Deposits WETH into the Vault (minting shares to the caller, not the router)
         shares = IERC4626(vault).deposit(msg.value, msg.sender);
 
-        // Comprueba que el router tenga balance 0 de WETH tras la operación
+        // Checks that the router has a WETH balance of 0 after the operation
         if (IERC20(weth).balanceOf(address(this)) != 0) revert Router__FundsStuck();
 
-        // Emite evento de ZapDeposit
+        // Emits ZapDeposit event
         emit ZapDeposit(msg.sender, address(0), msg.value, msg.value, shares);
     }
 
     /**
-     * @notice Deposita token ERC20 en el Vault (hace swap a WETH primero)
-     * @dev Hace swap token_in → WETH vía Uniswap V3 usando el pool especificado, luego deposita en el Vault
+     * @notice Deposits ERC20 token into the Vault (swaps to WETH first)
+     * @dev Swaps token_in -> WETH via Uniswap V3 using the specified pool, then deposits into the Vault
      * @dev Flow:
-     *      1. Transfiere token_in del usuario al Router
-     *      2. Hace swap token_in → WETH (Uniswap V3, pool especificado por pool_fee)
-     *      3. Valida protección de slippage
-     *      4. Deposita WETH en el Vault
-     *      5. El Vault acuña shares directamente al usuario
-     *      6. Comprueba que el Router siga stateless (balance = 0)
-     * @dev Tokens soportados: Cualquier token con par WETH en Uniswap V3
-     * @dev Pools comunes: USDC/DAI/USDT típicamente usan 500 (0.05%), WBTC usa 3000 (0.3%)
-     * @dev El frontend debe calcular el pool óptimo antes de llamar, escoge el más rentable para el par
-     *      de tokens automáticamente
-     * @param token_in Token a depositar
-     * @param amount_in Cantidad de token_in a depositar
-     * @param pool_fee Fee tier del pool de Uniswap V3 (100, 500, 3000, o 10000)
-     * @param min_weth_out WETH mínimo a recibir del swap (protección de slippage)
-     * @return shares Cantidad de shares del vault recibidas
+     *      1. Transfers token_in from user to Router
+     *      2. Swaps token_in -> WETH (Uniswap V3, pool specified by pool_fee)
+     *      3. Validates slippage protection
+     *      4. Deposits WETH into the Vault
+     *      5. The Vault mints shares directly to the user
+     *      6. Checks that the Router remains stateless (balance = 0)
+     * @dev Supported tokens: Any token with a WETH pair on Uniswap V3
+     * @dev Common pools: USDC/DAI/USDT typically use 500 (0.05%), WBTC uses 3000 (0.3%)
+     * @dev The frontend should calculate the optimal pool before calling, automatically choosing
+     *      the most profitable one for the token pair
+     * @param token_in Token to deposit
+     * @param amount_in Amount of token_in to deposit
+     * @param pool_fee Fee tier of the Uniswap V3 pool (100, 500, 3000, or 10000)
+     * @param min_weth_out Minimum WETH to receive from the swap (slippage protection)
+     * @return shares Amount of vault shares received
      */
     function zapDepositERC20(address token_in, uint256 amount_in, uint24 pool_fee, uint256 min_weth_out)
         external
         nonReentrant
         returns (uint256 shares)
     {
-        // Comprueba que token_in no sea address(0), si lo es ha mandado ETH o nos está trolleando
+        // Checks that token_in is not address(0), if it is they sent ETH or are trolling us
         if (token_in == address(0)) revert Router__ZeroAddress();
 
-        // Comprueba que token_in no sea WETH (debería usar vault.deposit() directamente para WETH)
+        // Checks that token_in is not WETH (should use vault.deposit() directly for WETH)
         if (token_in == weth) revert Router__UseVaultForWETH();
 
-        // Comprueba que amount_in no sea cero
+        // Checks that amount_in is not zero
         if (amount_in == 0) revert Router__ZeroAmount();
 
-        // Transfiere los tokens especificados del usuario al Router
+        // Transfers the specified tokens from the user to the Router
         IERC20(token_in).safeTransferFrom(msg.sender, address(this), amount_in);
 
-        // Swapea token_in → WETH usando una función interna (que llama a Uniswap V3, al pool especificado)
+        // Swaps token_in -> WETH using an internal function (which calls Uniswap V3, the specified pool)
         uint256 weth_out = _swapToWETH(token_in, amount_in, pool_fee, min_weth_out);
 
-        // Deposita WETH en el Vault (minteando las shares al caller, no al router)
+        // Deposits WETH into the Vault (minting shares to the caller, not the router)
         shares = IERC4626(vault).deposit(weth_out, msg.sender);
 
-        // Comprueba que el router tenga balance 0 de WETH tras la operación
+        // Checks that the router has a WETH balance of 0 after the operation
         if (IERC20(weth).balanceOf(address(this)) != 0) revert Router__FundsStuck();
 
-        // Emite evento ZapDeposit
+        // Emits ZapDeposit event
         emit ZapDeposit(msg.sender, token_in, amount_in, weth_out, shares);
     }
 
     /**
-     * @notice Retira shares del Vault y recibe ETH nativo
-     * @dev Redime shares del Vault por WETH, unwrappea WETH a ETH, envía ETH al usuario
+     * @notice Withdraws shares from the Vault and receives native ETH
+     * @dev Redeems shares from the Vault for WETH, unwraps WETH to ETH, sends ETH to the user
      * @dev Flow:
-     *      1. Transfiere shares del usuario al Router (requiere aprobación previa)
-     *      2. Redime shares en el Vault → recibe WETH
-     *      3. Unwrappea WETH → ETH
-     *      5. Transfiere ETH al usuario
-     *      6. Comrpueba que el Router siga stateless (balance = 0)
-     * @param shares Cantidad de shares a quemar del vault
-     * @return eth_out Cantidad de ETH recibida por el usuario
+     *      1. Transfers shares from user to Router (requires prior approval)
+     *      2. Redeems shares in the Vault -> receives WETH
+     *      3. Unwraps WETH -> ETH
+     *      5. Transfers ETH to the user
+     *      6. Checks that the Router remains stateless (balance = 0)
+     * @param shares Amount of vault shares to burn
+     * @return eth_out Amount of ETH received by the user
      */
     function zapWithdrawETH(uint256 shares) external nonReentrant returns (uint256 eth_out) {
-        // Comprueba que shares a redimir no sea cero
+        // Checks that shares to redeem is not zero
         if (shares == 0) revert Router__ZeroAmount();
 
-        // Transferir shares del usuario al Router (requiere aprobación previa)
+        // Transfers shares from user to Router (requires prior approval)
         IERC20(vault).safeTransferFrom(msg.sender, address(this), shares);
 
-        // Redime shares del Vault y obtiene el WETH correspondiente
+        // Redeems shares from the Vault and obtains the corresponding WETH
         uint256 weth_redeemed = IERC4626(vault).redeem(shares, address(this), address(this));
 
-        // Unwrappear WETH a ETH usando función interna (eth_out se podría omitir, la tenemos por conveniencia)
+        // Unwraps WETH to ETH using internal function (eth_out could be omitted, we have it for convenience)
         eth_out = _unwrapWETH(weth_redeemed);
 
-        // Transfiere el ETH al usuario
+        // Transfers ETH to the user
         (bool success,) = msg.sender.call{value: eth_out}("");
         if (!success) revert Router__ETHUnwrapFailed();
 
-        // Comprueba que el router tenga balance 0 de WETH tras la operación
+        // Checks that the router has a WETH balance of 0 after the operation
         if (IERC20(weth).balanceOf(address(this)) != 0) revert Router__FundsStuck();
 
-        // Emite evento ZapWithdraw
+        // Emits ZapWithdraw event
         emit ZapWithdraw(msg.sender, shares, weth_redeemed, address(0), eth_out);
     }
 
     /**
-     * @notice Retira shares del vault y recibe token ERC20 (hace swap desde WETH)
-     * @dev Redime shares por WETH, hace swap WETH → token_out vía Uniswap V3, envía token_out al usuario
+     * @notice Withdraws shares from the vault and receives ERC20 token (swaps from WETH)
+     * @dev Redeems shares for WETH, swaps WETH -> token_out via Uniswap V3, sends token_out to the user
      * @dev Flow:
-     *      1. Transfiere shares del usuario al Router (requiere aprobación previa)
-     *      2. Router redime shares en el Vault → recibe WETH
-     *      3. Hace swap WETH → token_out (Uniswap V3, pool especificado por pool_fee)
-     *      4. Valida protección de slippage
-     *      5. Transfiere token_out al usuario
-     *      6. Comprueba que el Router siga stateless tras la operación (balances = 0)
-     * @dev El frontend debe calcular el pool óptimo antes de llamar
-     * @param shares Cantidad de shares a quemar del vault
-     * @param token_out Token a recibir
-     * @param pool_fee Fee tier del pool de Uniswap V3 (100, 500, 3000, o 10000)
-     * @param min_token_out Mínimo token_out a recibir tras el swap (protección de slippage)
-     * @return amount_out Cantidad de token_out recibida por el usuario
+     *      1. Transfers shares from user to Router (requires prior approval)
+     *      2. Router redeems shares in the Vault -> receives WETH
+     *      3. Swaps WETH -> token_out (Uniswap V3, pool specified by pool_fee)
+     *      4. Validates slippage protection
+     *      5. Transfers token_out to the user
+     *      6. Checks that the Router remains stateless after the operation (balances = 0)
+     * @dev The frontend should calculate the optimal pool before calling
+     * @param shares Amount of vault shares to burn
+     * @param token_out Token to receive
+     * @param pool_fee Fee tier of the Uniswap V3 pool (100, 500, 3000, or 10000)
+     * @param min_token_out Minimum token_out to receive after the swap (slippage protection)
+     * @return amount_out Amount of token_out received by the user
      */
     function zapWithdrawERC20(uint256 shares, address token_out, uint24 pool_fee, uint256 min_token_out)
         external
         nonReentrant
         returns (uint256 amount_out)
     {
-        // Comprueba que token_out no sea address(0)
+        // Checks that token_out is not address(0)
         if (token_out == address(0)) revert Router__ZeroAddress();
 
-        // Comprueba que token_out no sea WETH (debería usar vault.redeem() directamente para WETH)
+        // Checks that token_out is not WETH (should use vault.redeem() directly for WETH)
         if (token_out == weth) revert Router__UseVaultForWETH();
 
-        // Comprueba que las shares a redimir no sean cero
+        // Checks that shares to redeem are not zero
         if (shares == 0) revert Router__ZeroAmount();
 
-        // Transfiere shares del usuario al Router (requiere aprobación previa)
+        // Transfers shares from user to Router (requires prior approval)
         IERC20(vault).safeTransferFrom(msg.sender, address(this), shares);
 
-        // Redime shares en el vault y recibe WETH
+        // Redeems shares in the vault and receives WETH
         uint256 weth_redeemed = IERC4626(vault).redeem(shares, address(this), address(this));
 
-        // Hacer swap WETH → token_out usando función interna
+        // Swaps WETH -> token_out using internal function
         amount_out = _swapFromWETH(weth_redeemed, token_out, pool_fee, min_token_out);
 
-        // Transfiere el token_out al usuario
+        // Transfers token_out to the user
         IERC20(token_out).safeTransfer(msg.sender, amount_out);
 
-        // Comprueba que el router tenga balance 0 de token_out después de la operación
+        // Checks that the router has a token_out balance of 0 after the operation
         if (IERC20(token_out).balanceOf(address(this)) != 0) revert Router__FundsStuck();
 
-        // Emite evento ZapWithdraw
+        // Emits ZapWithdraw event
         emit ZapWithdraw(msg.sender, shares, weth_redeemed, token_out, amount_out);
     }
 
-    //* Funciones internas
+    //* Internal functions
 
     /**
-     * @notice Wrappea ETH a WETH
-     * @dev Llama a WETH.deposit() con el valor en ETH para recibir tokens WETH a 1:1
-     *      No necesitamos devolver nada porque el WETH estará en el balance del contrato
-     * @param amount Cantidad de ETH a envolver
+     * @notice Wraps ETH to WETH
+     * @dev Calls WETH.deposit() with the ETH value to receive WETH tokens at 1:1
+     *      We don't need to return anything because the WETH will be in the contract's balance
+     * @param amount Amount of ETH to wrap
      */
     function _wrapETH(uint256 amount) internal {
-        // Llama a WETH.deposit() con el valor en ETH y comprueba que el wrap fue exitoso
+        // Calls WETH.deposit() with the ETH value and checks that the wrap was successful
         (bool success,) = weth.call{value: amount}(abi.encodeWithSignature("deposit()"));
         if (!success) revert Router__ETHWrapFailed();
     }
 
     /**
-     * @notice Unwrappea WETH a ETH nativo
-     * @dev Llama a WETH.withdraw() para convertir WETH a ETH a proporción 1:1
-     *      Aquí si que necesitamos devolver la cantidad para usarla en el swap por ERC20
-     * @param amount Cantidad de WETH a unwrappear
-     * @return eth_out Cantidad de ETH recibida
+     * @notice Unwraps WETH to native ETH
+     * @dev Calls WETH.withdraw() to convert WETH to ETH at a 1:1 ratio
+     *      Here we do need to return the amount to use it in the ERC20 swap
+     * @param amount Amount of WETH to unwrap
+     * @return eth_out Amount of ETH received
      */
     function _unwrapWETH(uint256 amount) internal returns (uint256 eth_out) {
-        // Llama a WETH.withdraw() con la cantidad de WETH y comprueba que el unwrap fue exitoso
+        // Calls WETH.withdraw() with the WETH amount and checks that the unwrap was successful
         (bool success,) = weth.call(abi.encodeWithSignature("withdraw(uint256)", amount));
         if (!success) revert Router__ETHUnwrapFailed();
 
-        // Devuelve la cantidad unwrapeada
+        // Returns the unwrapped amount
         eth_out = amount;
     }
 
     /**
-     * @notice Hace swap de ERC20 a WETH vía Uniswap V3
-     * @dev Construye Uniswap V3 ISwapRouter.ExactInputSingleParams y ejecuta el swap
-     * @param token_in Token a swapear
-     * @param amount_in Cantidad a swapear
-     * @param pool_fee Fee tier del pool de Uniswap V3 a usar
-     * @param min_weth_out Mínimo WETH a recibir (protección de slippage)
-     * @return weth_out WETH real recibido
+     * @notice Swaps ERC20 to WETH via Uniswap V3
+     * @dev Builds Uniswap V3 ISwapRouter.ExactInputSingleParams and executes the swap
+     * @param token_in Token to swap
+     * @param amount_in Amount to swap
+     * @param pool_fee Fee tier of the Uniswap V3 pool to use
+     * @param min_weth_out Minimum WETH to receive (slippage protection)
+     * @return weth_out Actual WETH received
      */
     function _swapToWETH(address token_in, uint256 amount_in, uint24 pool_fee, uint256 min_weth_out)
         internal
         returns (uint256 weth_out)
     {
-        // Aprueba al router de Uniswap para hacer transferFrom de token_in
+        // Approves the Uniswap router to transferFrom token_in
         IERC20(token_in).forceApprove(swap_router, amount_in);
 
-        // Construye los parámetros del swap para Uniswap V3
+        // Builds the swap parameters for Uniswap V3
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
             tokenIn: token_in, // Token 1
             tokenOut: weth, // Token 2
             fee: pool_fee, // Fee
-            recipient: address(this), // Recipient (este contrato)
-            deadline: block.timestamp, // A ejecutar máximo en este bloque
-            amountIn: amount_in, // Cantidad de token 1 entregada
-            amountOutMinimum: min_weth_out, // Cantidad de token 2 esperada
-            sqrtPriceLimitX96: 0 // Sin límite de precio
+            recipient: address(this), // Recipient (this contract)
+            deadline: block.timestamp, // Execute at most in this block
+            amountIn: amount_in, // Amount of token 1 provided
+            amountOutMinimum: min_weth_out, // Expected amount of token 2
+            sqrtPriceLimitX96: 0 // No price limit
         });
 
-        // Ejecuta el swap y obtiene la cantidad de WETH recibida
+        // Executes the swap and obtains the amount of WETH received
         weth_out = ISwapRouter(swap_router).exactInputSingle(params);
 
-        // Comprueba que la cantidad recibida sea mayor que la esperada (protección de slippage)
+        // Checks that the received amount is greater than expected (slippage protection)
         if (weth_out < min_weth_out) revert Router__SlippageExceeded();
     }
 
     /**
-     * @notice Hace swap de WETH a token ERC20 vía Uniswap V3
-     * @dev Construye Uniswap V3 ISwapRouter.ExactInputSingleParams y ejecuta el swap
-     * @param weth_in Cantidad de WETH a swapear
-     * @param token_out Token a recibir del swap
-     * @param pool_fee Fee tier del pool de Uniswap V3 a usar
-     * @param min_token_out Mínimo token_out a recibir (protección de slippage)
-     * @return amount_out Cantidad real de token_out recibido del swap
+     * @notice Swaps WETH to ERC20 token via Uniswap V3
+     * @dev Builds Uniswap V3 ISwapRouter.ExactInputSingleParams and executes the swap
+     * @param weth_in Amount of WETH to swap
+     * @param token_out Token to receive from the swap
+     * @param pool_fee Fee tier of the Uniswap V3 pool to use
+     * @param min_token_out Minimum token_out to receive (slippage protection)
+     * @return amount_out Actual amount of token_out received from the swap
      */
     function _swapFromWETH(uint256 weth_in, address token_out, uint24 pool_fee, uint256 min_token_out)
         internal
         returns (uint256 amount_out)
     {
-        // Aprueba al router de Uniswap para hacer transferFrom de WETH
+        // Approves the Uniswap router to transferFrom WETH
         IERC20(weth).forceApprove(swap_router, weth_in);
 
-        // Construye los parámetros del swap para Uniswap V3
+        // Builds the swap parameters for Uniswap V3
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
             tokenIn: weth, // Token 1
             tokenOut: token_out, // Token 2
             fee: pool_fee, // Fee
-            recipient: address(this), // Recipiente (este contrato)
-            deadline: block.timestamp, // A ejecutar máximo en este bloque
-            amountIn: weth_in, // Cantidad del token 1 entregada
-            amountOutMinimum: min_token_out, // Cantidad de token 2 esperada
-            sqrtPriceLimitX96: 0 // Sin límite de precio
+            recipient: address(this), // Recipient (this contract)
+            deadline: block.timestamp, // Execute at most in this block
+            amountIn: weth_in, // Amount of token 1 provided
+            amountOutMinimum: min_token_out, // Expected amount of token 2
+            sqrtPriceLimitX96: 0 // No price limit
         });
 
-        // Ejecuta el swap y obtener cantidad de token_out recibida
+        // Executes the swap and obtains the amount of token_out received
         amount_out = ISwapRouter(swap_router).exactInputSingle(params);
 
-        // Comprueba que la cantidad recibida sea mayor que la esperada (protección de slippage)
+        // Checks that the received amount is greater than expected (slippage protection)
         if (amount_out < min_token_out) revert Router__SlippageExceeded();
     }
 
     /**
-     * @notice Fallback para recibir ETH (necesario para el unwrap de WETH)
-     * @dev Solo acepta ETH del contrato WETH para evitar envíos accidentales de ETH
-     *      En caso de recibir ETH de otro address revierte la operación
+     * @notice Fallback to receive ETH (necessary for WETH unwrap)
+     * @dev Only accepts ETH from the WETH contract to avoid accidental ETH sends
+     *      If ETH is received from another address the operation reverts
      */
     receive() external payable {
         if (msg.sender != weth) revert Router__UnauthorizedETHSender();

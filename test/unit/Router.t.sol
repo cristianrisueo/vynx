@@ -12,11 +12,11 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 /**
  * @title RouterTest
  * @author cristianrisueo
- * @notice Tests unitarios para el Router del protocolo
- * @dev Fork de Mainnet para usar pools reales de Uniswap V3
+ * @notice Unit tests for the protocol Router
+ * @dev Mainnet fork to use real Uniswap V3 pools
  */
 contract RouterTest is Test {
-    //* Eventos (declarados para testing)
+    //* Events (declared for testing)
 
     event ZapDeposit(
         address indexed user, address indexed token_in, uint256 amount_in, uint256 weth_out, uint256 shares_out
@@ -28,24 +28,24 @@ contract RouterTest is Test {
     Vault public vault;
     StrategyManager public manager;
 
-    // Direcciones Mainnet
+    // Mainnet addresses
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
     address constant DAI = 0x6B175474E89094C44Da98b954EedeAC495271d0F;
     address constant WBTC = 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599;
     address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
 
-    // Usuarios de prueba
+    // Test users
     address public alice = makeAddr("alice");
     address public bob = makeAddr("bob");
 
     //* Setup
 
     function setUp() public {
-        // Fork de Mainnet
+        // Mainnet fork
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Deploy protocolo con parámetros del tier Balanced
+        // Deploy protocol with Balanced tier parameters
         manager = new StrategyManager(
             WETH,
             IStrategyManager.TierConfig({
@@ -76,25 +76,25 @@ contract RouterTest is Test {
     //* === zapDepositETH ===
 
     /**
-     * @notice Test: zapDepositETH deposita ETH correctamente y emite shares
+     * @notice Test: zapDepositETH deposits ETH correctly and emits shares
      */
     function test_ZapDepositETH_Success() external {
         // Setup
         uint256 deposit_amount = 1 ether;
         deal(alice, deposit_amount);
 
-        // Ejecutar
+        // Execute
         vm.prank(alice);
         uint256 shares = router.zapDepositETH{value: deposit_amount}();
 
-        // Verificar
+        // Verify
         assertGt(shares, 0, "Should receive shares");
         assertEq(vault.balanceOf(alice), shares, "Alice should own shares");
         assertEq(IERC20(WETH).balanceOf(address(router)), 0, "Router should be stateless");
     }
 
     /**
-     * @notice Test: zapDepositETH revierte si msg.value es cero
+     * @notice Test: zapDepositETH reverts if msg.value is zero
      */
     function test_ZapDepositETH_RevertsIfZeroAmount() external {
         vm.prank(alice);
@@ -103,7 +103,7 @@ contract RouterTest is Test {
     }
 
     /**
-     * @notice Test: zapDepositETH mantiene Router stateless (balance WETH = 0)
+     * @notice Test: zapDepositETH keeps Router stateless (WETH balance = 0)
      */
     function test_ZapDepositETH_StatelessEnforcement() external {
         uint256 deposit_amount = 1 ether;
@@ -116,7 +116,7 @@ contract RouterTest is Test {
     }
 
     /**
-     * @notice Test: zapDepositETH emite evento ZapDeposit correctamente
+     * @notice Test: zapDepositETH emits ZapDeposit event correctly
      */
     function test_ZapDepositETH_EmitsEvent() external {
         uint256 deposit_amount = 1 ether;
@@ -131,29 +131,29 @@ contract RouterTest is Test {
     //* === zapDepositERC20 ===
 
     /**
-     * @notice Test: zapDepositERC20 deposita USDC y recibe shares
+     * @notice Test: zapDepositERC20 deposits USDC and receives shares
      */
     function test_ZapDepositERC20_Success_USDC() external {
-        // Setup: dar USDC a Alice
+        // Setup: give USDC to Alice
         uint256 usdc_amount = 1000e6; // 1000 USDC
         deal(USDC, alice, usdc_amount);
 
-        // Aprobar Router
+        // Approve Router
         vm.startPrank(alice);
         IERC20(USDC).approve(address(router), usdc_amount);
 
-        // Ejecutar con pool 0.05%
+        // Execute with 0.05% pool
         uint256 shares = router.zapDepositERC20(USDC, usdc_amount, 500, 0);
         vm.stopPrank();
 
-        // Verificar
+        // Verify
         assertGt(shares, 0, "Should receive shares");
         assertEq(vault.balanceOf(alice), shares, "Alice should own shares");
         assertEq(IERC20(WETH).balanceOf(address(router)), 0, "Router should be stateless");
     }
 
     /**
-     * @notice Test: zapDepositERC20 revierte si token_in es address(0)
+     * @notice Test: zapDepositERC20 reverts if token_in is address(0)
      */
     function test_ZapDepositERC20_RevertsIfZeroAddress() external {
         vm.prank(alice);
@@ -162,7 +162,7 @@ contract RouterTest is Test {
     }
 
     /**
-     * @notice Test: zapDepositERC20 revierte si token_in es WETH
+     * @notice Test: zapDepositERC20 reverts if token_in is WETH
      */
     function test_ZapDepositERC20_RevertsIfTokenIsWETH() external {
         vm.prank(alice);
@@ -171,7 +171,7 @@ contract RouterTest is Test {
     }
 
     /**
-     * @notice Test: zapDepositERC20 revierte si amount_in es cero
+     * @notice Test: zapDepositERC20 reverts if amount_in is zero
      */
     function test_ZapDepositERC20_RevertsIfZeroAmount() external {
         vm.prank(alice);
@@ -180,7 +180,7 @@ contract RouterTest is Test {
     }
 
     /**
-     * @notice Test: zapDepositERC20 protege contra slippage
+     * @notice Test: zapDepositERC20 protects against slippage
      */
     function test_ZapDepositERC20_SlippageProtection() external {
         uint256 usdc_amount = 1000e6;
@@ -189,7 +189,7 @@ contract RouterTest is Test {
         vm.startPrank(alice);
         IERC20(USDC).approve(address(router), usdc_amount);
 
-        // Pedir más WETH del que es posible obtener (1000 ETH es imposible con 1000 USDC)
+        // Requesting more WETH than is possible (1000 ETH is impossible with 1000 USDC)
         vm.expectRevert();
         router.zapDepositERC20(USDC, usdc_amount, 500, 1000 ether);
         vm.stopPrank();
@@ -198,26 +198,26 @@ contract RouterTest is Test {
     //* === zapWithdrawETH ===
 
     /**
-     * @notice Test: zapWithdrawETH retira shares y recibe ETH
+     * @notice Test: zapWithdrawETH withdraws shares and receives ETH
      */
     function test_ZapWithdrawETH_Success() external {
-        // Setup: Alice deposita primero
+        // Setup: Alice deposits first
         uint256 deposit_amount = 1 ether;
         deal(alice, deposit_amount);
 
         vm.prank(alice);
         uint256 shares = router.zapDepositETH{value: deposit_amount}();
 
-        // Aprobar Router para quemar shares
+        // Approve Router to burn shares
         vm.startPrank(alice);
         vault.approve(address(router), shares);
 
-        // Retirar y capturar ETH recibido
+        // Withdraw and capture received ETH
         uint256 eth_out = router.zapWithdrawETH(shares);
 
         vm.stopPrank();
 
-        // Verificar
+        // Verify
         assertEq(vault.balanceOf(alice), 0, "Shares should be burned");
         assertGt(eth_out, 0, "Should receive ETH");
         assertApproxEqRel(eth_out, deposit_amount, 0.001e18, "Should receive ~deposited amount");
@@ -225,7 +225,7 @@ contract RouterTest is Test {
     }
 
     /**
-     * @notice Test: zapWithdrawETH revierte si shares es cero
+     * @notice Test: zapWithdrawETH reverts if shares is zero
      */
     function test_ZapWithdrawETH_RevertsIfZeroShares() external {
         vm.prank(alice);
@@ -234,7 +234,7 @@ contract RouterTest is Test {
     }
 
     /**
-     * @notice Test: zapWithdrawETH mantiene Router stateless
+     * @notice Test: zapWithdrawETH keeps Router stateless
      */
     function test_ZapWithdrawETH_StatelessEnforcement() external {
         uint256 deposit_amount = 1 ether;
@@ -254,23 +254,23 @@ contract RouterTest is Test {
     //* === zapWithdrawERC20 ===
 
     /**
-     * @notice Test: zapWithdrawERC20 retira shares y recibe USDC
+     * @notice Test: zapWithdrawERC20 withdraws shares and receives USDC
      */
     function test_ZapWithdrawERC20_Success_USDC() external {
-        // Setup: Alice deposita ETH primero
+        // Setup: Alice deposits ETH first
         uint256 deposit_amount = 1 ether;
         deal(alice, deposit_amount);
 
         vm.prank(alice);
         uint256 shares = router.zapDepositETH{value: deposit_amount}();
 
-        // Retirar en USDC
+        // Withdraw in USDC
         vm.startPrank(alice);
         vault.approve(address(router), shares);
         uint256 usdc_out = router.zapWithdrawERC20(shares, USDC, 500, 0);
         vm.stopPrank();
 
-        // Verificar
+        // Verify
         assertGt(usdc_out, 0, "Should receive USDC");
         assertEq(IERC20(USDC).balanceOf(alice), usdc_out, "Alice should have USDC");
         assertEq(vault.balanceOf(alice), 0, "Shares should be burned");
@@ -278,7 +278,7 @@ contract RouterTest is Test {
     }
 
     /**
-     * @notice Test: zapWithdrawERC20 revierte si token_out es WETH
+     * @notice Test: zapWithdrawERC20 reverts if token_out is WETH
      */
     function test_ZapWithdrawERC20_RevertsIfTokenIsWETH() external {
         vm.prank(alice);
@@ -287,11 +287,11 @@ contract RouterTest is Test {
     }
 
     /**
-     * @notice Test: zapWithdrawERC20 solo verifica balance de token_out (no WETH)
+     * @notice Test: zapWithdrawERC20 only checks token_out balance (not WETH)
      */
     function test_ZapWithdrawERC20_OnlyChecksTokenOutBalance() external {
-        // Este test verifica que NO se hace double-check de WETH
-        // (ya discutimos que WETH es transitorio: redeem → swap consume todo)
+        // This test verifies that there is NO double-check of WETH
+        // (we already discussed that WETH is transient: redeem → swap consumes it all)
 
         uint256 deposit_amount = 1 ether;
         deal(alice, deposit_amount);
@@ -304,8 +304,8 @@ contract RouterTest is Test {
         router.zapWithdrawERC20(shares, USDC, 500, 0);
         vm.stopPrank();
 
-        // Solo verificar que token_out balance es 0, no WETH
+        // Only verify that token_out balance is 0, not WETH
         assertEq(IERC20(USDC).balanceOf(address(router)), 0, "USDC balance should be 0");
-        // No hacemos assert de WETH porque no se verifica en el contrato
+        // We don't assert WETH because it is not checked in the contract
     }
 }

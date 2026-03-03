@@ -13,15 +13,15 @@ import {CurveStrategy} from "../src/strategies/CurveStrategy.sol";
 /**
  * @title DeployBalanced
  * @author cristianrisueo
- * @notice Script de deployment del tier Balanced de VynX V2
- * @dev Despliega: StrategyManager + LidoStrategy + AaveStrategy + CurveStrategy + Vault
+ * @notice Deployment script for the VynX V1 Balanced tier
+ * @dev Deploys: StrategyManager + LidoStrategy + AaveStrategy + CurveStrategy + Vault
  *
- * Tier Balanced:
- *   - Estrategias: Lido (staking) + Aave (wstETH lending) + Curve (stETH/ETH LP)
- *   - Allocations: max 50% por estrategia, min 20%
+ * Balanced Tier:
+ *   - Strategies: Lido (staking) + Aave (wstETH lending) + Curve (stETH/ETH LP)
+ *   - Allocations: max 50% per strategy, min 20%
  *   - Rebalance: threshold 2%, min TVL 8 ETH
  *
- * Uso:
+ * Usage:
  *   forge script script/DeployBalanced.s.sol --rpc-url $MAINNET_RPC_URL --broadcast
  */
 contract DeployBalanced is Script {
@@ -40,17 +40,17 @@ contract DeployBalanced is Script {
     address constant UNI_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
 
     function run() external {
-        // Lee treasury y founder desde variables de entorno
+        // Read treasury and founder from environment variables
         address treasury = vm.envAddress("TREASURY_ADDRESS");
         address founder = vm.envAddress("FOUNDER_ADDRESS");
 
-        // Validacion explicita: revierte con mensaje claro si no estan seteadas
+        // Explicit validation: reverts with clear message if not set
         require(treasury != address(0), "DeployBalanced: TREASURY_ADDRESS no seteada");
         require(founder != address(0), "DeployBalanced: FOUNDER_ADDRESS no seteada");
 
         vm.startBroadcast();
 
-        // 1. Despliega StrategyManager (necesita existir antes que las estrategias)
+        // 1. Deploy StrategyManager (must exist before strategies)
         StrategyManager manager = new StrategyManager(
             WETH,
             IStrategyManager.TierConfig({
@@ -61,7 +61,7 @@ contract DeployBalanced is Script {
             })
         );
 
-        // 2. Despliega las 3 estrategias (necesitan address del manager)
+        // 2. Deploy 3 strategies (they need the manager address)
         LidoStrategy lido_strat = new LidoStrategy(
             address(manager),
             WSTETH,
@@ -72,7 +72,7 @@ contract DeployBalanced is Script {
 
         AaveStrategy aave_strat = new AaveStrategy(
             address(manager),
-            WETH, // asset del StrategyManager
+            WETH, // StrategyManager asset
             AAVE_POOL,
             AAVE_REWARDS,
             AAVE_TOKEN,
@@ -96,7 +96,7 @@ contract DeployBalanced is Script {
             uint24(3000) // CRV/WETH 0.3%
         );
 
-        // 3. Despliega Vault (necesita address del manager)
+        // 3. Deploy Vault (needs manager address)
         Vault vault = new Vault(
             WETH,
             address(manager),
@@ -110,18 +110,18 @@ contract DeployBalanced is Script {
             })
         );
 
-        // 4. Resuelve la dependencia circular: conecta el vault al manager
+        // 4. Resolves circular dependency: connects vault to manager
         manager.initialize(address(vault));
 
-        // 5. Registra las 3 estrategias en el manager
+        // 5. Registers 3 strategies in manager
         manager.addStrategy(address(lido_strat));
         manager.addStrategy(address(aave_strat));
         manager.addStrategy(address(curve_strat));
 
         vm.stopBroadcast();
 
-        // Log de addresses deployadas
-        console.log("=== VynX V2 Balanced Tier ===");
+        // Log deployed addresses
+        console.log("=== VynX V1 Balanced Tier ===");
         console.log("StrategyManager:", address(manager));
         console.log("Vault:          ", address(vault));
         console.log("LidoStrategy:   ", address(lido_strat));

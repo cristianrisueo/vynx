@@ -4,18 +4,18 @@ pragma solidity 0.8.33;
 /**
  * @title INonfungiblePositionManager
  * @author cristianrisueo
- * @notice Interfaz mínima del NonfungiblePositionManager de Uniswap V3
+ * @notice Minimal interface for the Uniswap V3 NonfungiblePositionManager
  *
- * @dev No importamos la interfaz oficial de v3-periphery porque depende de IERC721Metadata e
- *      IERC721Enumerable de OpenZeppelin v4 (en token/ERC721/), que en OZ v5 se movieron a
- *      token/ERC721/extensions/. Solo necesitamos las funciones de gestión de posiciones.
+ * @dev We don't import the official v3-periphery interface because it depends on IERC721Metadata and
+ *      IERC721Enumerable from OpenZeppelin v4 (in token/ERC721/), which in OZ v5 were moved to
+ *      token/ERC721/extensions/. We only need the position management functions.
  *
- * @dev Signatures verificadas contra el contrato deployado en mainnet:
+ * @dev Signatures verified against the contract deployed on mainnet:
  *      https://etherscan.io/address/0xC36442b4a4522E871399CD717aBDD847Ab11FE88
  */
 interface INonfungiblePositionManager {
     /**
-     * @notice Parámetros para crear una nueva posición LP
+     * @notice Parameters for creating a new LP position
      */
     struct MintParams {
         address token0;
@@ -32,7 +32,7 @@ interface INonfungiblePositionManager {
     }
 
     /**
-     * @notice Parámetros para aumentar la liquidez de una posición existente
+     * @notice Parameters for increasing liquidity of an existing position
      */
     struct IncreaseLiquidityParams {
         uint256 tokenId;
@@ -44,7 +44,7 @@ interface INonfungiblePositionManager {
     }
 
     /**
-     * @notice Parámetros para disminuir la liquidez de una posición
+     * @notice Parameters for decreasing liquidity of a position
      */
     struct DecreaseLiquidityParams {
         uint256 tokenId;
@@ -55,7 +55,7 @@ interface INonfungiblePositionManager {
     }
 
     /**
-     * @notice Parámetros para recoger tokens pendientes (fees + liquidez retirada)
+     * @notice Parameters for collecting pending tokens (fees + withdrawn liquidity)
      */
     struct CollectParams {
         uint256 tokenId;
@@ -65,13 +65,13 @@ interface INonfungiblePositionManager {
     }
 
     /**
-     * @notice Crea una nueva posición LP en el rango [tickLower, tickUpper] y mintea un NFT
-     * @dev El NFT representa la posición. El caller recibe el tokenId como dueño de la posición
-     * @param params Parámetros de la posición (ver MintParams)
-     * @return tokenId ID del NFT creado
-     * @return liquidity Liquidez añadida al pool
-     * @return amount0 Token0 efectivamente depositado
-     * @return amount1 Token1 efectivamente depositado
+     * @notice Creates a new LP position in the range [tickLower, tickUpper] and mints an NFT
+     * @dev The NFT represents the position. The caller receives the tokenId as the position owner
+     * @param params Position parameters (see MintParams)
+     * @return tokenId ID of the minted NFT
+     * @return liquidity Liquidity added to the pool
+     * @return amount0 Token0 actually deposited
+     * @return amount1 Token1 actually deposited
      */
     function mint(MintParams calldata params)
         external
@@ -79,11 +79,11 @@ interface INonfungiblePositionManager {
         returns (uint256 tokenId, uint128 liquidity, uint256 amount0, uint256 amount1);
 
     /**
-     * @notice Aumenta la liquidez de una posición existente sin cambiar el rango de ticks
-     * @param params Parámetros del aumento de liquidez (ver IncreaseLiquidityParams)
-     * @return liquidity Liquidez añadida
-     * @return amount0 Token0 efectivamente depositado
-     * @return amount1 Token1 efectivamente depositado
+     * @notice Increases liquidity of an existing position without changing the tick range
+     * @param params Increase liquidity parameters (see IncreaseLiquidityParams)
+     * @return liquidity Liquidity added
+     * @return amount0 Token0 actually deposited
+     * @return amount1 Token1 actually deposited
      */
     function increaseLiquidity(IncreaseLiquidityParams calldata params)
         external
@@ -91,11 +91,11 @@ interface INonfungiblePositionManager {
         returns (uint128 liquidity, uint256 amount0, uint256 amount1);
 
     /**
-     * @notice Disminuye la liquidez de una posición, pasando los tokens a estado "owed"
-     * @dev Los tokens NO se transfieren automáticamente: hay que llamar a collect() después
-     * @param params Parámetros de la reducción de liquidez (ver DecreaseLiquidityParams)
-     * @return amount0 Token0 movido a estado owed
-     * @return amount1 Token1 movido a estado owed
+     * @notice Decreases liquidity of a position, moving tokens to "owed" state
+     * @dev Tokens are NOT automatically transferred: collect() must be called afterwards
+     * @param params Decrease liquidity parameters (see DecreaseLiquidityParams)
+     * @return amount0 Token0 moved to owed state
+     * @return amount1 Token1 moved to owed state
      */
     function decreaseLiquidity(DecreaseLiquidityParams calldata params)
         external
@@ -103,36 +103,36 @@ interface INonfungiblePositionManager {
         returns (uint256 amount0, uint256 amount1);
 
     /**
-     * @notice Recoge los tokens en estado "owed" de la posición (fees + liquidez retirada)
-     * @dev Combina fees acumulados y tokens de decreaseLiquidity en una sola llamada
-     * @param params Parámetros de la recogida (ver CollectParams)
-     * @return amount0 Token0 recogido
-     * @return amount1 Token1 recogido
+     * @notice Collects tokens in "owed" state from the position (fees + withdrawn liquidity)
+     * @dev Combines accumulated fees and tokens from decreaseLiquidity in a single call
+     * @param params Collection parameters (see CollectParams)
+     * @return amount0 Token0 collected
+     * @return amount1 Token1 collected
      */
     function collect(CollectParams calldata params) external payable returns (uint256 amount0, uint256 amount1);
 
     /**
-     * @notice Quema el NFT de una posición vacía (liquidity == 0 y sin tokens owed)
-     * @dev Revierte si la posición aún tiene liquidez o tokens pendientes
-     * @param tokenId ID del NFT a quemar
+     * @notice Burns the NFT of an empty position (liquidity == 0 and no tokens owed)
+     * @dev Reverts if the position still has liquidity or pending tokens
+     * @param tokenId ID of the NFT to burn
      */
     function burn(uint256 tokenId) external payable;
 
     /**
-     * @notice Consulta los datos completos de una posición por su tokenId
-     * @param tokenId ID del NFT de la posición
-     * @return nonce Nonce usado para permisos
-     * @return operator Operador aprobado para la posición
-     * @return token0 Token de menor dirección del par
-     * @return token1 Token de mayor dirección del par
-     * @return fee Fee tier del pool (ej: 500 = 0.05%)
-     * @return tickLower Tick inferior del rango
-     * @return tickUpper Tick superior del rango
-     * @return liquidity Liquidez activa actual en el rango
-     * @return feeGrowthInside0LastX128 Acumulador de fees para token0
-     * @return feeGrowthInside1LastX128 Acumulador de fees para token1
-     * @return tokensOwed0 Token0 pendiente de collect (fees + liquidez retirada)
-     * @return tokensOwed1 Token1 pendiente de collect (fees + liquidez retirada)
+     * @notice Queries the complete data of a position by its tokenId
+     * @param tokenId ID of the position NFT
+     * @return nonce Nonce used for permissions
+     * @return operator Approved operator for the position
+     * @return token0 Token with the lower address of the pair
+     * @return token1 Token with the higher address of the pair
+     * @return fee Fee tier of the pool (e.g. 500 = 0.05%)
+     * @return tickLower Lower tick of the range
+     * @return tickUpper Upper tick of the range
+     * @return liquidity Current active liquidity in the range
+     * @return feeGrowthInside0LastX128 Fee accumulator for token0
+     * @return feeGrowthInside1LastX128 Fee accumulator for token1
+     * @return tokensOwed0 Token0 pending collection (fees + withdrawn liquidity)
+     * @return tokensOwed1 Token1 pending collection (fees + withdrawn liquidity)
      */
     function positions(uint256 tokenId)
         external

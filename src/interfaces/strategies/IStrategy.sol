@@ -4,92 +4,92 @@ pragma solidity 0.8.33;
 /**
  * @title IStrategy
  * @author cristianrisueo
- * @notice Interfaz estándar que todas las estrategias deben implementar
- * @dev Permite que StrategyManager trate estrategias de distintos protocolos:
- *      Aave, Compound, etc... De manera uniforme
+ * @notice Standard interface that all strategies must implement
+ * @dev Allows StrategyManager to treat strategies from different protocols:
+ *      Aave, Compound, etc... in a uniform way
  */
 interface IStrategy {
-    //* Eventos
+    //* Events
 
     /**
-     * @notice Emitido cuando se depositan assets en la estrategia
-     * @param caller Direccion que ejecuto el deposit (debería ser strategy manager)
-     * @param assets Cantidad de asset depositados
-     * @param shares Shares recibidos del protocolo dónde se deposita (xToken correspondiente)
+     * @notice Emitted when assets are deposited into the strategy
+     * @param caller Address that executed the deposit (should be strategy manager)
+     * @param assets Amount of assets deposited
+     * @param shares Shares received from the protocol where assets are deposited (corresponding xToken)
      */
     event Deposited(address indexed caller, uint256 assets, uint256 shares);
 
     /**
-     * @notice Emitido cuando se retiran assets de la estrategia
-     * @param caller Direccion que ejecuto el withdraw (debería ser strategy manager)
-     * @param assets Cantidad de assets retirados
-     * @param shares Shares quemados por el protocolo (xToken redimidos por asset)
+     * @notice Emitted when assets are withdrawn from the strategy
+     * @param caller Address that executed the withdraw (should be strategy manager)
+     * @param assets Amount of assets withdrawn
+     * @param shares Shares burned by the protocol (xTokens redeemed for assets)
      */
     event Withdrawn(address indexed caller, uint256 assets, uint256 shares);
 
     /**
-     * @notice Emitido cuando se recolectan y reinvierten los rewards de la estrategia
-     * @param caller Direccion que ejecuto el harvest (debería ser strategy manager)
-     * @param profit Profit generado en asset después de claim y swap de rewards (los xTokens)
+     * @notice Emitted when strategy rewards are collected and reinvested
+     * @param caller Address that executed the harvest (should be strategy manager)
+     * @param profit Profit generated in assets after claiming and swapping rewards (the xTokens)
      */
     event Harvested(address indexed caller, uint256 profit);
 
-    //* Funciones principales
+    //* Main functions
 
     /**
-     * @notice Deposita assets en el protocolo subyacente
-     * @dev El caller debe transferir assets a esta strategy antes de llamar. En un flujo normal
-     *      stragey manager transfiere los assets a depositar a la estrategia correspondiente
-     * @param assets Cantidad de assets a depositar
-     * @return shares Shares recibidos (los xTokens representando el depósito en el protocolo X)
+     * @notice Deposits assets into the underlying protocol
+     * @dev The caller must transfer assets to this strategy before calling. In a normal flow
+     *      strategy manager transfers the assets to deposit to the corresponding strategy
+     * @param assets Amount of assets to deposit
+     * @return shares Shares received (the xTokens representing the deposit in protocol X)
      */
     function deposit(uint256 assets) external returns (uint256 shares);
 
     /**
-     * @notice Retira assets del protocolo subyacente
-     * @dev Transfiere assets al caller después de retirar, es el flujo contrario a deposit:
-     *      Los assets ya convertidos pasan de estrategia correspondiente a strategy manager
-     * @param assets Cantidad de assets a retirar
-     * @return actual_withdrawn assets realmente retirados (cantidad a retirar + yield generado)
+     * @notice Withdraws assets from the underlying protocol
+     * @dev Transfers assets to the caller after withdrawing, it's the reverse flow of deposit:
+     *      The already-converted assets move from the corresponding strategy to the strategy manager
+     * @param assets Amount of assets to withdraw
+     * @return actual_withdrawn Assets actually withdrawn (amount to withdraw + generated yield)
      */
     function withdraw(uint256 assets) external returns (uint256 actual_withdrawn);
 
     /**
-     * @notice Cosecha las rewards del protocolo subyacente. Se hace continuamente para maximizar APY
-     * @dev Reclama rewards → Swap a asset → Re-invierte en el protocolo → Aumenta el APY todavía mas
-     * @dev Recuerdo que los rewards vendrán en xToken, son una recomensa extra que da el protocolo
-     *      subyacente por usarlo. Al buscar APY máximo, se swapea y reinverte de nuevo dicha recomensa
-     * @return profit Profit en assets generado por rewards
+     * @notice Harvests rewards from the underlying protocol. Done continuously to maximize APY
+     * @dev Claims rewards → Swap to asset → Reinvests in protocol → Increases APY even further
+     * @dev Remember that rewards come in xToken form, they are an extra reward the underlying
+     *      protocol gives for using it. Seeking max APY, that reward is swapped and reinvested
+     * @return profit Profit in assets generated by rewards
      */
     function harvest() external returns (uint256 profit);
 
-    //* Funciones de consulta
+    //* Query functions
 
     /**
-     * @notice Devuelve el valor total de assets bajo gestión
-     * @dev Incluye assets depositado + yield acumulado
-     * @dev Como el asset estará depositado en el protocolo X, se calculará
-     *      usando los shares (xToken) recibidos del protocolo subyacente
-     * @return total Valor total en assets (seguramente en wei)
+     * @notice Returns the total value of assets under management
+     * @dev Includes deposited assets + accumulated yield
+     * @dev Since the asset will be deposited in protocol X, it will be calculated
+     *      using the shares (xToken) received from the underlying protocol
+     * @return total Total value in assets (likely in wei)
      */
     function totalAssets() external view returns (uint256 total);
 
     /**
-     * @notice Devuelve el APY actual del protocolo subyacente
-     * @dev En basis points: 100 = 1%, 350 = 3.5%, 1000 = 10%
-     * @return apy_basis_points APY en basis points
+     * @notice Returns the current APY of the underlying protocol
+     * @dev In basis points: 100 = 1%, 350 = 3.5%, 1000 = 10%
+     * @return apy_basis_points APY in basis points
      */
     function apy() external view returns (uint256 apy_basis_points);
 
     /**
-     * @notice Devuelve el nombre de la estrategia
-     * @return strategy_name Ej: "Aave v3 assets Strategy"
+     * @notice Returns the strategy name
+     * @return strategy_name e.g. "Aave v3 assets Strategy"
      */
     function name() external view returns (string memory strategy_name);
 
     /**
-     * @notice Devuelve la dirección del asset que maneja
-     * @return asset_address Dirección del token usado como underlying asset
+     * @notice Returns the address of the asset it manages
+     * @return asset_address Address of the token used as underlying asset
      */
     function asset() external view returns (address asset_address);
 }

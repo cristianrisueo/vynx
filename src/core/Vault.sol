@@ -15,183 +15,183 @@ import {IStrategyManager} from "../interfaces/core/IStrategyManager.sol";
 /**
  * @title Vault
  * @author cristianrisueo
- * @notice Vault ERC4626 del protocolo VynX que actua como punto de entrada para los usuarios
- * @dev Gestiona deposits/withdrawals de usuarios, mantiene idle buffer para optimizar gas,
- *      coordina harvest de estrategias y distribuye performance fees entre treasury y founder
- * @dev Extiende ERC4626 (Tokenized Vault Standard) con funcionalidades adicionales:
- *      - Idle buffer management (acumula deposits hasta threshold antes de allocar)
- *      - Performance fees (20% sobre profits, split 80/20 treasury/founder)
+ * @notice ERC4626 vault serving as the main entry point for users in the VynX protocol
+ * @dev Manages user deposits/withdrawals, maintains idle buffer to optimize gas,
+ *      coordinates strategy harvest and distributes performance fees between treasury and founder
+ * @dev Extends ERC4626 (Tokenized Vault Standard) with additional functionality:
+ *      - Idle buffer management (accumulates deposits until threshold before allocating)
+ *      - Performance fees (20% on profits, split 80/20 treasury/founder)
  *      - Circuit breakers (minDeposit, maxTVL, pausable)
  */
 contract Vault is IVault, ERC4626, Ownable, Pausable {
     //* library attachments
 
     /**
-     * @notice Usa SafeERC20 para todas las operaciones de IERC20 de manera segura
-     * @dev Evita errores comunes con tokens legacy o mal implementados
+     * @notice Uses SafeERC20 for all IERC20 operations safely
+     * @dev Avoids common errors with legacy or poorly implemented tokens
      */
     using SafeERC20 for IERC20;
 
     /**
-     * @notice Usa Math de OpenZeppelin para operaciones matematicas seguras
-     * @dev Incluye min, max, average y otras utilidades
+     * @notice Uses OpenZeppelin Math for safe mathematical operations
+     * @dev Includes min, max, average and other utilities
      */
     using Math for uint256;
 
-    //* Errores
+    //* Errors
 
     /**
-     * @notice Error cuando se intenta depositar menos del minimo establecido
+     * @notice Error when trying to deposit less than the established minimum
      */
     error Vault__DepositBelowMinimum();
 
     /**
-     * @notice Error cuando el depósito excede el TVL maximo permitido
+     * @notice Error when the deposit exceeds the maximum allowed TVL
      */
     error Vault__MaxTVLExceeded();
 
     /**
-     * @notice Error se intenta invertir pero el idle buffer no es suficiente
+     * @notice Error when trying to invest but the idle buffer is insufficient
      */
     error Vault__InsufficientIdleBuffer();
 
     /**
-     * @notice Error cuando el performance fee excede el 100%
+     * @notice Error when the performance fee exceeds 100%
      */
     error Vault__InvalidPerformanceFee();
 
     /**
-     * @notice Error cuando la suma de splits (treasury + founder) no es exactamente 100%
+     * @notice Error when the sum of splits (treasury + founder) is not exactly 100%
      */
     error Vault__InvalidFeeSplit();
 
     /**
-     * @notice Error cuando se pasa address(0) como treasury
+     * @notice Error when address(0) is passed as treasury
      */
     error Vault__InvalidTreasuryAddress();
 
     /**
-     * @notice Error cuando se pasa address(0) como founder
+     * @notice Error when address(0) is passed as founder
      */
     error Vault__InvalidFounderAddress();
 
     /**
-     * @notice Error cuando se pasa address(0) como strategy manager
+     * @notice Error when address(0) is passed as strategy manager
      */
     error Vault__InvalidStrategyManagerAddress();
 
     /**
-     * @notice Error cuando un parametro del constructor tiene un valor inválido
+     * @notice Error when a constructor parameter has an invalid value
      */
     error Vault__InvalidParam();
 
-    //* Structs y eventos: Se heredan de la interfaz, no es necesario implementarlos
+    //* Structs and events: Inherited from the interface, no need to implement them
 
-    //* Constantes
+    //* Constants
 
-    /// @notice Base para calculos de basis points (100% = 10000 basis points)
+    /// @notice Base for basis points calculations (100% = 10000 basis points)
     uint256 public constant BASIS_POINTS = 10000;
 
-    //* Variables de estado
+    //* State variables
 
-    /// @notice Direccion del strategy manager que gestiona las estrategias
+    /// @notice Address of the strategy manager that manages the strategies
     address public strategy_manager;
 
-    /// @notice Mapeo de keepers oficiales del protocolo (no reciben incentivo)
+    /// @notice Mapping of official protocol keepers (do not receive incentive)
     mapping(address => bool) public is_official_keeper;
 
-    /// @notice Direccion del treasury que recibe su parte de performance fees
+    /// @notice Address of the treasury that receives its share of performance fees
     address public treasury_address;
 
-    /// @notice Direccion del founder que recibe su parte de performance fees
+    /// @notice Address of the founder that receives their share of performance fees
     address public founder_address;
 
-    /// @notice Balance de assets idle (no asignados a estrategias)
+    /// @notice Balance of idle assets (not assigned to strategies)
     uint256 public idle_buffer;
 
-    /// @notice Timestamp del ultimo harvest ejecutado
+    /// @notice Timestamp of the last executed harvest
     uint256 public last_harvest;
 
-    /// @notice Profit total (bruto) acumulado desde el inicio del vault
+    /// @notice Total (gross) profit accumulated since vault inception
     uint256 public total_harvested;
 
-    /// @notice Deposito minimo permitido, configurado en el constructor segun el tipo de riego del protocolo
+    /// @notice Minimum deposit allowed, configured in the constructor according to the protocol risk tier
     uint256 public min_deposit;
 
-    /// @notice Threshold de idle buffer para ejecutar allocateIdle, configurado en el constructor segun el risk tier
+    /// @notice Idle buffer threshold to execute allocateIdle, configured in the constructor according to the risk tier
     uint256 public idle_threshold;
 
-    /// @notice TVL maximo permitido como circuit breaker, configurado en el constructor segun el risk tier
+    /// @notice Maximum TVL allowed as a circuit breaker, configured in the constructor according to the risk tier
     uint256 public max_tvl;
 
-    /// @notice Profit minimo requerido para ejecutar harvest (evita harvests no rentables por gas)
+    /// @notice Minimum profit required to execute harvest (avoids unprofitable harvests due to gas)
     uint256 public min_profit_for_harvest;
 
-    /// @notice Porcentaje de los profits generados que van al keeper externo que ejecute el harvest
+    /// @notice Percentage of generated profits that go to the external keeper who executes the harvest
     uint256 public keeper_incentive = 100;
 
-    /// @notice Performance fee cobrado sobre profits generados, en basis points (2000 = 20%)
+    /// @notice Performance fee charged on generated profits, in basis points (2000 = 20%)
     uint256 public performance_fee = 2000;
 
-    /// @notice Porcentaje del performance fee que va al treasury (8000 = 80%)
+    /// @notice Percentage of the performance fee that goes to the treasury (8000 = 80%)
     uint256 public treasury_split = 8000;
 
-    /// @notice Porcentaje del performance fee que va al founder (2000 = 20%)
+    /// @notice Percentage of the performance fee that goes to the founder (2000 = 20%)
     uint256 public founder_split = 2000;
 
     //* Constructor
 
     /**
-     * @notice Constructor del Vault
-     * @dev Inicializa el vault ERC4626 con el asset base y setea direcciones criticas
-     * @param _asset Direccion del asset subyacente
-     * @param _strategyManager Direccion del strategy manager
-     * @param _treasury Direccion del treasury
-     * @param _founder Direccion del founder
-     * @param params Parametros operativos del vault configurables por tier
+     * @notice Vault constructor
+     * @dev Initializes the ERC4626 vault with the base asset and sets critical addresses
+     * @param _asset Address of the underlying asset
+     * @param _strategyManager Address of the strategy manager
+     * @param _treasury Address of the treasury
+     * @param _founder Address of the founder
+     * @param params Operational vault parameters configurable by tier
      */
     constructor(address _asset, address _strategyManager, address _treasury, address _founder, TierConfig memory params)
         ERC4626(IERC20(_asset))
         ERC20(string.concat("VynX ", ERC20(_asset).symbol(), " Vault"), string.concat("vx", ERC20(_asset).symbol()))
         Ownable(msg.sender)
     {
-        // Comprueba que las direcciones criticas no sean address(0)
+        // Checks that critical addresses are not address(0)
         if (_strategyManager == address(0)) revert Vault__InvalidStrategyManagerAddress();
         if (_treasury == address(0)) revert Vault__InvalidTreasuryAddress();
         if (_founder == address(0)) revert Vault__InvalidFounderAddress();
 
-        // Valida los parametros del vault específicos de la configuración de risk tier
+        // Validates vault parameters specific to the risk tier configuration
         if (params.idle_threshold == 0) revert Vault__InvalidParam();
         if (params.min_profit_for_harvest == 0) revert Vault__InvalidParam();
         if (params.max_tvl == 0) revert Vault__InvalidParam();
         if (params.min_deposit == 0) revert Vault__InvalidParam();
         if (params.max_tvl <= params.idle_threshold) revert Vault__InvalidParam();
 
-        // Setea las direcciones criticas del protocolo
+        // Sets the critical protocol addresses
         strategy_manager = _strategyManager;
         treasury_address = _treasury;
         founder_address = _founder;
 
-        // Asigna los parametros del tier
+        // Assigns the tier parameters
         idle_threshold = params.idle_threshold;
         min_profit_for_harvest = params.min_profit_for_harvest;
         max_tvl = params.max_tvl;
         min_deposit = params.min_deposit;
 
-        // Inicializa timestamp del ultimo harvest
+        // Initializes the timestamp of the last harvest
         last_harvest = block.timestamp;
     }
 
-    //* ERC4626 overrides: deposit, mint, withdraw, redeem y totalAssets con logica custom
+    //* ERC4626 overrides: deposit, mint, withdraw, redeem and totalAssets with custom logic
 
     /**
-     * @notice Deposita assets en el vault y recibe shares a cambio
-     * @dev Override de ERC4626.deposit con Compruebaciones adicionales y gestion de idle buffer
-     * @dev Los assets se acumulan en idle_buffer hasta alcanzar idle_threshold, momento en
-     *      el cual se invierten en las estrategias
-     * @param assets Cantidad de assets a depositar
-     * @param receiver Direccion que recibira los shares
-     * @return shares Cantidad de shares minteados para el receiver
+     * @notice Deposits assets into the vault and receives shares in return
+     * @dev Override of ERC4626.deposit with additional checks and idle buffer management
+     * @dev Assets accumulate in idle_buffer until reaching idle_threshold, at which
+     *      point they are invested in the strategies
+     * @param assets Amount of assets to deposit
+     * @param receiver Address that will receive the shares
+     * @return shares Amount of shares minted for the receiver
      */
     function deposit(uint256 assets, address receiver)
         public
@@ -199,34 +199,34 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
         whenNotPaused
         returns (uint256 shares)
     {
-        // Comprueba que el depósito sea mayor que el mínimo y no exceda el TVL max permitido
+        // Checks that the deposit is greater than the minimum and does not exceed the max allowed TVL
         if (assets < min_deposit) revert Vault__DepositBelowMinimum();
         if (totalAssets() + assets > max_tvl) revert Vault__MaxTVLExceeded();
 
-        // Calcula shares a mintear (ERC4626 standard)
+        // Calculates shares to mint (ERC4626 standard)
         shares = previewDeposit(assets);
 
-        // Ejecuta el depósito: transferFrom user -> vault, mint shares
+        // Executes the deposit: transferFrom user -> vault, mint shares
         _deposit(_msgSender(), receiver, assets, shares);
 
-        // Incrementa el idle buffer con los assets depositados
+        // Increments the idle buffer with the deposited assets
         idle_buffer += assets;
 
-        // Si el idle buffer alcanza el threshold, invierte en las estrategias
+        // If the idle buffer reaches the threshold, invests in the strategies
         if (idle_buffer >= idle_threshold) {
             _allocateIdle();
         }
 
-        // Emite evento de depósito
+        // Emits deposit event
         emit Deposited(receiver, assets, shares);
     }
 
     /**
-     * @notice Mintea shares exactos depositando la cantidad necesaria de assets
-     * @dev Override de ERC4626.mint con Compruebaciones adicionales
-     * @param shares Cantidad de shares a mintear
-     * @param receiver Direccion que recibira los shares
-     * @return assets Cantidad de assets depositados para mintear esos shares
+     * @notice Mints exact shares by depositing the required amount of assets
+     * @dev Override of ERC4626.mint with additional checks
+     * @param shares Amount of shares to mint
+     * @param receiver Address that will receive the shares
+     * @return assets Amount of assets deposited to mint those shares
      */
     function mint(uint256 shares, address receiver)
         public
@@ -234,90 +234,90 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
         whenNotPaused
         returns (uint256 assets)
     {
-        // Calcula assets necesarios para mintear esos shares (ERC4626 standard)
+        // Calculates assets needed to mint those shares (ERC4626 standard)
         assets = previewMint(shares);
 
-        // Comprueba que los assets necesarios superen el depósito mínimo y no excedan el TVL permitido
+        // Checks that the required assets exceed the minimum deposit and do not exceed the allowed TVL
         if (assets < min_deposit) revert Vault__DepositBelowMinimum();
         if (totalAssets() + assets > max_tvl) revert Vault__MaxTVLExceeded();
 
-        // Ejecuta el mint: transferFrom user -> vault, mint shares
+        // Executes the mint: transferFrom user -> vault, mint shares
         _deposit(_msgSender(), receiver, assets, shares);
 
-        // Incrementa el idle buffer con los assets depositados
+        // Increments the idle buffer with the deposited assets
         idle_buffer += assets;
 
-        // Si el idle buffer alcanza el threshold, invierte en las estrategias
+        // If the idle buffer reaches the threshold, invests in the strategies
         if (idle_buffer >= idle_threshold) {
             _allocateIdle();
         }
 
-        // Emite evento de depósito
+        // Emits deposit event
         emit Deposited(receiver, assets, shares);
     }
 
     /**
-     * @notice Retira assets del vault quemando shares
-     * @dev Override de ERC4626.withdraw con logica de retiro desde idle buffer o estrategias
-     * @dev Prioriza retirar desde idle buffer (gas efficient). Si no hay suficiente idle,
-     *      retira proporcionalmente de estrategias via strategy manager
-     * @param assets Cantidad de assets a retirar
-     * @param receiver Direccion que recibira los assets
-     * @param owner Direccion del owner de los shares a quemar
-     * @return shares Cantidad de shares quemados
+     * @notice Withdraws assets from the vault by burning shares
+     * @dev Override of ERC4626.withdraw with withdrawal logic from idle buffer or strategies
+     * @dev Prioritizes withdrawing from the idle buffer (gas efficient). If there is not enough idle,
+     *      withdraws proportionally from strategies via strategy manager
+     * @param assets Amount of assets to withdraw
+     * @param receiver Address that will receive the assets
+     * @param owner Address of the owner of the shares to burn
+     * @return shares Amount of shares burned
      */
     function withdraw(uint256 assets, address receiver, address owner)
         public
         override(ERC4626, IERC4626)
         returns (uint256 shares)
     {
-        // Calcula shares a quemar para retirar esos assets (ERC4626 standard)
+        // Calculates shares to burn to withdraw those assets (ERC4626 standard)
         shares = previewWithdraw(assets);
 
-        // Ejecuta el withdraw: quema shares y retira assets priorizando desde idle buffer
+        // Executes the withdrawal: burns shares and withdraws assets prioritizing from idle buffer
         _withdraw(_msgSender(), receiver, owner, assets, shares);
 
-        // Emite evento de retiro y devuelve las shares quemadas
+        // Emits withdrawal event and returns the burned shares
         emit Withdrawn(receiver, assets, shares);
     }
 
     /**
-     * @notice Quema shares exactos retirando la cantidad correspondiente de assets
-     * @dev Override de ERC4626.redeem con logica de retiro desde idle buffer o estrategias
-     * @param shares Cantidad de shares a quemar
-     * @param receiver Direccion que recibira los assets
-     * @param owner Direccion del owner de los shares
-     * @return assets Cantidad de assets retirados
+     * @notice Burns exact shares withdrawing the corresponding amount of assets
+     * @dev Override of ERC4626.redeem with withdrawal logic from idle buffer or strategies
+     * @param shares Amount of shares to burn
+     * @param receiver Address that will receive the assets
+     * @param owner Address of the owner of the shares
+     * @return assets Amount of assets withdrawn
      */
     function redeem(uint256 shares, address receiver, address owner)
         public
         override(ERC4626, IERC4626)
         returns (uint256 assets)
     {
-        // Calcula assets a retirar por esos shares (ERC4626 standard)
+        // Calculates assets to withdraw for those shares (ERC4626 standard)
         assets = previewRedeem(shares);
 
-        // Ejecuta el redeem: quema shares y retira assets priorizando desde idle buffer
+        // Executes the redeem: burns shares and withdraws assets prioritizing from idle buffer
         _withdraw(_msgSender(), receiver, owner, assets, shares);
 
-        // Emite evento de retiro y devuelve los assets enviados
+        // Emits withdrawal event and returns the sent assets
         emit Withdrawn(receiver, assets, shares);
     }
 
     /**
-     * @notice Devuelve el total de assets bajo gestion del vault
-     * @dev Override de ERC4626.totalAssets
-     * @dev Suma: idle buffer + assets en estrategias via strategy manager
-     * @return total Total de assets gestionados por el vault
+     * @notice Returns the total assets under management by the vault
+     * @dev Override of ERC4626.totalAssets
+     * @dev Sum: idle buffer + assets in strategies via strategy manager
+     * @return total Total assets managed by the vault
      */
     function totalAssets() public view override(ERC4626, IERC4626) returns (uint256 total) {
         total = idle_buffer + IStrategyManager(strategy_manager).totalAssets();
     }
 
     /**
-     * @notice Devuelve el maximo de assets que un usuario puede depositar
-     * @dev Override de ERC4626.maxDeposit para respetar el circuit breaker de maxTVL
-     * @return maxAssets Maximo de assets depositables antes de alcanzar maxTVL
+     * @notice Returns the maximum assets a user can deposit
+     * @dev Override of ERC4626.maxDeposit to respect the maxTVL circuit breaker
+     * @return maxAssets Maximum depositable assets before reaching maxTVL
      */
     function maxDeposit(address) public view override(ERC4626, IERC4626) returns (uint256 maxAssets) {
         if (paused()) return 0;
@@ -329,9 +329,9 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
     }
 
     /**
-     * @notice Devuelve el maximo de shares que un usuario puede mintear
-     * @dev Override de ERC4626.maxMint para respetar el circuit breaker de maxTVL
-     * @return maxShares Maximo de shares minteables antes de alcanzar maxTVL
+     * @notice Returns the maximum shares a user can mint
+     * @dev Override of ERC4626.maxMint to respect the maxTVL circuit breaker
+     * @return maxShares Maximum mintable shares before reaching maxTVL
      */
     function maxMint(address) public view override(ERC4626, IERC4626) returns (uint256 maxShares) {
         if (paused()) return 0;
@@ -342,38 +342,38 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
         return convertToShares(max_tvl - current);
     }
 
-    //* Funciones principales: harvest y allocateIdle (publicas, sin restricciones)
+    //* Main functions: harvest and allocateIdle (public, unrestricted)
 
     /**
-     * @notice Cosecha rewards de todas las estrategias y distribuye performance fees
-     * @dev Funcion publica: cualquiera puede llamarla (keepers, bots, usuarios)
-     * @dev Los keepers oficiales no reciben incentivo. Los externos si (keeper_incentive)
-     * @dev Solo ejecuta si profit >= min_profit_for_harvest (evita harvests no rentables)
-     * @dev Flujo:
+     * @notice Harvests rewards from all strategies and distributes performance fees
+     * @dev Public function: anyone can call it (keepers, bots, users)
+     * @dev Official keepers do not receive incentive. External ones do (keeper_incentive)
+     * @dev Only executes if profit >= min_profit_for_harvest (avoids unprofitable harvests)
+     * @dev Flow:
      *      - strategyManager.harvest() ->
-     *      - valida profit minimo ->
-     *      - paga incentivo al keeper externo ->
-     *      - calcula performance fee ->
-     *      - distribuye fees ->
-     *      - actualiza contadores (last_harvest, total_harvested)
-     * @return profit Profit total cosechado antes de deducir fees e incentivos
+     *      - validates minimum profit ->
+     *      - pays incentive to external keeper ->
+     *      - calculates performance fee ->
+     *      - distributes fees ->
+     *      - updates counters (last_harvest, total_harvested)
+     * @return profit Total profit harvested before deducting fees and incentives
      */
     function harvest() external whenNotPaused returns (uint256 profit) {
-        // Llama al strategy manager para cosechar profits de todas las estrategias
+        // Calls the strategy manager to harvest profits from all strategies
         profit = IStrategyManager(strategy_manager).harvest();
 
-        // Si no hay profit o no alcanza el minimo, no ejecuta
+        // If there is no profit or it does not reach the minimum, do not execute
         if (profit < min_profit_for_harvest) return 0;
 
-        // Calcula y paga incentivo solo si el caller no es keeper oficial
+        // Calculates and pays incentive only if the caller is not an official keeper
         uint256 keeper_reward = 0;
         if (!is_official_keeper[msg.sender]) {
-            // Calcula el keeper reward
+            // Calculates the keeper reward
             keeper_reward = (profit * keeper_incentive) / BASIS_POINTS;
 
-            // A no ser que keeper_incentive = 0 siempre entra, pero programación defensiva
-            // Intenta pagar primero del idle buffer, si no hay suficiente el restante lo
-            // saca de las estrategias
+            // Unless keeper_incentive = 0 this always enters, but defensive programming
+            // Tries to pay from the idle buffer first, if not enough the remainder is
+            // taken from the strategies
             if (keeper_reward > 0) {
                 if (keeper_reward > idle_buffer) {
                     uint256 to_withdraw = keeper_reward - idle_buffer;
@@ -382,158 +382,158 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
                     idle_buffer -= keeper_reward;
                 }
 
-                // Trasnfiere al keeper su fee por hacer la llamada
+                // Transfers to the keeper their fee for making the call
                 IERC20(asset()).safeTransfer(msg.sender, keeper_reward);
             }
         }
 
-        // Calcula performance fee sobre el profit neto (despues de keeper reward)
+        // Calculates performance fee on net profit (after keeper reward)
         uint256 net_profit = profit - keeper_reward;
         uint256 perf_fee = (net_profit * performance_fee) / BASIS_POINTS;
 
-        // Distribuye fees entre treasury y founder
+        // Distributes fees between treasury and founder
         _distributePerformanceFee(perf_fee);
 
-        // Actualiza contadores
+        // Updates counters
         last_harvest = block.timestamp;
         total_harvested += profit;
 
-        // Emite evento de cosechado de profits
+        // Emits profit harvest event
         emit Harvested(profit, perf_fee, block.timestamp);
     }
 
     /**
-     * @notice Asigna assets idle a estrategias cuando se alcanza el threshold
-     * @dev Funcion publica: cualquiera puede llamarla cuando idle >= threshold
-     * @dev Solo ejecuta si hay suficiente idle buffer, evitando gas waste en allocations pequeños
+     * @notice Assigns idle assets to strategies when the threshold is reached
+     * @dev Public function: anyone can call it when idle >= threshold
+     * @dev Only executes if there is enough idle buffer, avoiding gas waste on small allocations
      */
     function allocateIdle() external whenNotPaused {
         if (idle_buffer < idle_threshold) revert Vault__InsufficientIdleBuffer();
         _allocateIdle();
     }
 
-    //* Funciones administrativas: Setters de parametros del protocolo (onlyOwner)
+    //* Administrative functions: Protocol parameter setters (onlyOwner)
 
-    //? Antipattern poner el evento antes de setear las variables pero nos ahorramos una variable
-    //? temporal = menos gas. Lo vas a ver en casi todos
+    //? Antipattern to emit the event before setting the variables but we save a temporary
+    //? variable = less gas. You'll see this in almost all of them
 
     /**
-     * @notice Actualiza el performance fee
-     * @param new_fee Nuevo performance fee en basis points
+     * @notice Updates the performance fee
+     * @param new_fee New performance fee in basis points
      */
     function setPerformanceFee(uint256 new_fee) external onlyOwner {
-        // Comprueba que el fee no exceda 100% (max = BASIS_POINTS)
+        // Checks that the fee does not exceed 100% (max = BASIS_POINTS)
         if (new_fee > BASIS_POINTS) revert Vault__InvalidPerformanceFee();
 
-        // Emite evento de cambio con fee anterior y nuevo
+        // Emits event with previous and new fee
         emit PerformanceFeeUpdated(performance_fee, new_fee);
 
-        // Actualiza el performance fee
+        // Updates the performance fee
         performance_fee = new_fee;
     }
 
     /**
-     * @notice Actualiza el split de fees entre treasury y founder
-     * @param new_treasury Nuevo porcentaje para treasury en basis points
-     * @param new_founder Nuevo porcentaje para founder en basis points
+     * @notice Updates the fee split between treasury and founder
+     * @param new_treasury New percentage for treasury in basis points
+     * @param new_founder New percentage for founder in basis points
      */
     function setFeeSplit(uint256 new_treasury, uint256 new_founder) external onlyOwner {
-        // Comprueba que la suma sea exactamente 100% (BASIS_POINTS)
+        // Checks that the sum is exactly 100% (BASIS_POINTS)
         if (new_treasury + new_founder != BASIS_POINTS) revert Vault__InvalidFeeSplit();
 
-        // Actualiza los splits
+        // Updates the splits
         treasury_split = new_treasury;
         founder_split = new_founder;
 
-        // Emite evento con nuevos splits
+        // Emits event with new splits
         emit FeeSplitUpdated(new_treasury, new_founder);
     }
 
     /**
-     * @notice Actualiza el deposito minimo
-     * @param new_min Nuevo deposito minimo en assets
+     * @notice Updates the minimum deposit
+     * @param new_min New minimum deposit in assets
      */
     function setMinDeposit(uint256 new_min) external onlyOwner {
-        // Emite evento con minimo anterior y nuevo
+        // Emits event with previous and new minimum
         emit MinDepositUpdated(min_deposit, new_min);
 
-        // Actualiza el minimo
+        // Updates the minimum
         min_deposit = new_min;
     }
 
     /**
-     * @notice Actualiza el idle threshold
-     * @param new_threshold Nuevo threshold en assets
+     * @notice Updates the idle threshold
+     * @param new_threshold New threshold in assets
      */
     function setIdleThreshold(uint256 new_threshold) external onlyOwner {
-        // Emite evento con threshold anterior y nuevo
+        // Emits event with previous and new threshold
         emit IdleThresholdUpdated(idle_threshold, new_threshold);
 
-        // Actualiza el threshold
+        // Updates the threshold
         idle_threshold = new_threshold;
     }
 
     /**
-     * @notice Actualiza el TVL maximo
-     * @param new_max Nuevo TVL maximo en assets
+     * @notice Updates the maximum TVL
+     * @param new_max New maximum TVL in assets
      */
     function setMaxTVL(uint256 new_max) external onlyOwner {
-        // Emite evento con maximo anterior y nuevo
+        // Emits event with previous and new maximum
         emit MaxTVLUpdated(max_tvl, new_max);
 
-        // Actualiza el maximo
+        // Updates the maximum
         max_tvl = new_max;
     }
 
     /**
-     * @notice Actualiza la direccion del treasury
-     * @param new_treasury Nueva direccion del treasury
+     * @notice Updates the treasury address
+     * @param new_treasury New treasury address
      */
     function setTreasury(address new_treasury) external onlyOwner {
-        // Comprueba que la nueva direccion no sea address(0)
+        // Checks that the new address is not address(0)
         if (new_treasury == address(0)) revert Vault__InvalidTreasuryAddress();
 
-        // Emite evento con direccion anterior y nueva
+        // Emits event with previous and new address
         emit TreasuryUpdated(treasury_address, new_treasury);
 
-        // Actualiza la direccion
+        // Updates the address
         treasury_address = new_treasury;
     }
 
     /**
-     * @notice Actualiza la direccion del founder
-     * @param new_founder Nueva direccion del founder
+     * @notice Updates the founder address
+     * @param new_founder New founder address
      */
     function setFounder(address new_founder) external onlyOwner {
-        // Comprueba que la nueva direccion no sea address(0)
+        // Checks that the new address is not address(0)
         if (new_founder == address(0)) revert Vault__InvalidFounderAddress();
 
-        // Emite evento con direccion anterior y nueva
+        // Emits event with previous and new address
         emit FounderUpdated(founder_address, new_founder);
 
-        // Actualiza la direccion
+        // Updates the address
         founder_address = new_founder;
     }
 
     /**
-     * @notice Actualiza la direccion del strategy manager
-     * @param new_manager Nueva direccion del strategy manager
+     * @notice Updates the strategy manager address
+     * @param new_manager New strategy manager address
      */
     function setStrategyManager(address new_manager) external onlyOwner {
-        // Comprueba que la nueva direccion no sea address(0)
+        // Checks that the new address is not address(0)
         if (new_manager == address(0)) revert Vault__InvalidStrategyManagerAddress();
 
-        // Emite evento con nueva direccion
+        // Emits event with new address
         emit StrategyManagerUpdated(new_manager);
 
-        // Actualiza la direccion
+        // Updates the address
         strategy_manager = new_manager;
     }
 
     /**
-     * @notice Añade o remueve un keeper oficial
-     * @param keeper Direccion del keeper
-     * @param status True para añadir, false para remover
+     * @notice Adds or removes an official keeper
+     * @param keeper Address of the keeper
+     * @param status True to add, false to remove
      */
     function setOfficialKeeper(address keeper, bool status) external onlyOwner {
         is_official_keeper[keeper] = status;
@@ -541,291 +541,291 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
     }
 
     /**
-     * @notice Actualiza el profit minimo requerido para ejecutar harvest
-     * @param new_min Nuevo profit minimo en assets
+     * @notice Updates the minimum profit required to execute harvest
+     * @param new_min New minimum profit in assets
      */
     function setMinProfitForHarvest(uint256 new_min) external onlyOwner {
-        // Emite evento con minimo anterior y nuevo
+        // Emits event with previous and new minimum
         emit MinProfitForHarvestUpdated(min_profit_for_harvest, new_min);
 
-        // Actualiza el profit minimo
+        // Updates the minimum profit
         min_profit_for_harvest = new_min;
     }
 
     /**
-     * @notice Actualiza el incentivo para keepers externos
-     * @param new_incentive Nuevo incentivo en basis points
+     * @notice Updates the incentive for external keepers
+     * @param new_incentive New incentive in basis points
      */
     function setKeeperIncentive(uint256 new_incentive) external onlyOwner {
-        // Comprueba que el incentivo no exceda 100% (max = BASIS_POINTS)
+        // Checks that the incentive does not exceed 100% (max = BASIS_POINTS)
         if (new_incentive > BASIS_POINTS) revert Vault__InvalidPerformanceFee();
 
-        // Emite evento con incentivo anterior y nuevo
+        // Emits event with previous and new incentive
         emit KeeperIncentiveUpdated(keeper_incentive, new_incentive);
 
-        // Actualiza el incentivo
+        // Updates the incentive
         keeper_incentive = new_incentive;
     }
 
-    //* Funciones de emergencia: Stops y reconciliación de idle buffer tras emergency exit (onlyOwner)
+    //* Emergency functions: Stops and idle buffer reconciliation after emergency exit (onlyOwner)
 
     /**
-     * @notice Pausa el vault (emergency stop)
-     * @dev Solo el owner puede pausar. Bloquea nuevos depositos (deposit, mint), harvest
-     *      y allocateIdle. Los retiros (withdraw, redeem) permanecen habilitados: un usuario
-     *      siempre debe poder recuperar sus fondos, independientemente del estado del vault
+     * @notice Pauses the vault (emergency stop)
+     * @dev Only the owner can pause. Blocks new deposits (deposit, mint), harvest
+     *      and allocateIdle. Withdrawals (withdraw, redeem) remain enabled: a user
+     *      must always be able to recover their funds, regardless of the vault state
      */
     function pause() external onlyOwner {
         _pause();
     }
 
     /**
-     * @notice Despausa el vault
-     * @dev Solo el owner puede despausar
+     * @notice Unpauses the vault
+     * @dev Only the owner can unpause
      */
     function unpause() external onlyOwner {
         _unpause();
     }
 
     /**
-     * @notice Reconcilia idle_buffer con el balance real de WETH del contrato
+     * @notice Reconciles idle_buffer with the actual WETH balance of the contract
      *
-     * @dev onlyOwner. Necesario despues de emergencyExit() del manager, que transfiere WETH
-     *      al vault directamente sin pasar por deposit() ni _allocateIdle(), desincronizando
-     *      idle_buffer y haciendo que totalAssets() sea incorrecto hasta la reconciliacion
-     *      Si no sincronizamos, tras un emergencyExit totalAssets no será correcto y los retiros
-     *      fallarán en un punto por desincronización de tesorería.
+     * @dev onlyOwner. Necessary after emergencyExit() from the manager, which transfers WETH
+     *      to the vault directly without going through deposit() or _allocateIdle(), desynchronizing
+     *      idle_buffer and making totalAssets() incorrect until reconciliation
+     *      If we don't sync, after an emergencyExit totalAssets will not be correct and withdrawals
+     *      will fail at some point due to treasury desynchronization.
      */
     function syncIdleBuffer() external onlyOwner {
-        // Recoge el valor anterior para el evento
+        // Captures the previous value for the event
         uint256 old_buffer = idle_buffer;
 
-        // Obtiene el balance del contrato de WETH
+        // Gets the contract's WETH balance
         uint256 real_balance = IERC20(asset()).balanceOf(address(this));
 
-        // Actualiza idle_buffer con el balance real (total assets = idle + estrategias - 0 tras exit)
+        // Updates idle_buffer with the actual balance (total assets = idle + strategies - 0 after exit)
         idle_buffer = real_balance;
 
-        // Emite evento con valor anterior y nuevo para trazabilidad
+        // Emits event with previous and new value for traceability
         emit IdleBufferSynced(old_buffer, real_balance);
     }
 
-    //* Funciones de consulta: Getters de parametros y estado del protocolo
+    //* Query functions: Getters for protocol parameters and state
 
     /**
-     * @notice Devuelve el performance fee actual
-     * @return fee_bps Performance fee en basis points
+     * @notice Returns the current performance fee
+     * @return fee_bps Performance fee in basis points
      */
     function performanceFee() external view returns (uint256 fee_bps) {
         return performance_fee;
     }
 
     /**
-     * @notice Devuelve el treasury split actual
-     * @return split_bps Treasury split en basis points
+     * @notice Returns the current treasury split
+     * @return split_bps Treasury split in basis points
      */
     function treasurySplit() external view returns (uint256 split_bps) {
         return treasury_split;
     }
 
     /**
-     * @notice Devuelve el founder split actual
-     * @return split_bps Founder split en basis points
+     * @notice Returns the current founder split
+     * @return split_bps Founder split in basis points
      */
     function founderSplit() external view returns (uint256 split_bps) {
         return founder_split;
     }
 
     /**
-     * @notice Devuelve el deposito minimo actual
-     * @return min_amount Deposito minimo en assets
+     * @notice Returns the current minimum deposit
+     * @return min_amount Minimum deposit in assets
      */
     function minDeposit() external view returns (uint256 min_amount) {
         return min_deposit;
     }
 
     /**
-     * @notice Devuelve el idle threshold actual
-     * @return threshold Idle threshold en assets
+     * @notice Returns the current idle threshold
+     * @return threshold Idle threshold in assets
      */
     function idleThreshold() external view returns (uint256 threshold) {
         return idle_threshold;
     }
 
     /**
-     * @notice Devuelve el TVL maximo actual
-     * @return max_tvl TVL maximo en assets
+     * @notice Returns the current maximum TVL
+     * @return max_tvl Maximum TVL in assets
      */
     function maxTVL() external view returns (uint256) {
         return max_tvl;
     }
 
     /**
-     * @notice Devuelve la direccion del treasury
-     * @return treasury_address Direccion del treasury
+     * @notice Returns the treasury address
+     * @return treasury_address Address of the treasury
      */
     function treasury() external view returns (address) {
         return treasury_address;
     }
 
     /**
-     * @notice Devuelve la direccion del founder
-     * @return founder_address Direccion del founder
+     * @notice Returns the founder address
+     * @return founder_address Address of the founder
      */
     function founder() external view returns (address) {
         return founder_address;
     }
 
     /**
-     * @notice Devuelve la direccion del strategy manager
-     * @return manager_address Direccion del strategy manager
+     * @notice Returns the strategy manager address
+     * @return manager_address Address of the strategy manager
      */
     function strategyManager() external view returns (address) {
         return strategy_manager;
     }
 
     /**
-     * @notice Devuelve el balance de idle buffer actual
-     * @return idle_balance Balance de assets idle
+     * @notice Returns the current idle buffer balance
+     * @return idle_balance Balance of idle assets
      */
     function idleBuffer() external view returns (uint256) {
         return idle_buffer;
     }
 
     /**
-     * @notice Devuelve el timestamp del ultimo harvest
-     * @return timestamp Timestamp del ultimo harvest
+     * @notice Returns the timestamp of the last harvest
+     * @return timestamp Timestamp of the last harvest
      */
     function lastHarvest() external view returns (uint256 timestamp) {
         return last_harvest;
     }
 
     /**
-     * @notice Devuelve el profit total acumulado
-     * @return total_profit Profit total desde el inicio
+     * @notice Returns the total accumulated profit
+     * @return total_profit Total profit since inception
      */
     function totalHarvested() external view returns (uint256 total_profit) {
         return total_harvested;
     }
 
     /**
-     * @notice Devuelve el profit minimo requerido para ejecutar harvest
-     * @return min_profit Profit minimo en assets
+     * @notice Returns the minimum profit required to execute harvest
+     * @return min_profit Minimum profit in assets
      */
     function minProfitForHarvest() external view returns (uint256 min_profit) {
         return min_profit_for_harvest;
     }
 
     /**
-     * @notice Devuelve el incentivo para keepers externos
-     * @return incentive_bps Incentivo en basis points
+     * @notice Returns the incentive for external keepers
+     * @return incentive_bps Incentive in basis points
      */
     function keeperIncentive() external view returns (uint256 incentive_bps) {
         return keeper_incentive;
     }
 
-    //* Funciones internas: Helpers para deposit/withdraw y fee distribution
+    //* Internal functions: Helpers for deposit/withdraw and fee distribution
 
     /**
-     * @notice Retira assets del vault desde idle buffer o estrategias
-     * @dev Override de ERC4626._withdraw para implementar logica custom de retiro
-     * @dev Prioriza retirar desde idle buffer. Si no hay suficiente, retira de estrategias
-     * @param caller Direccion que llama la funcion (msg.sender)
-     * @param receiver Direccion que recibira los assets
-     * @param owner Direccion del owner de los shares
-     * @param assets Cantidad de assets a retirar
-     * @param shares Cantidad de shares a quemar
+     * @notice Withdraws assets from the vault from idle buffer or strategies
+     * @dev Override of ERC4626._withdraw to implement custom withdrawal logic
+     * @dev Prioritizes withdrawing from idle buffer. If insufficient, withdraws from strategies
+     * @param caller Address that calls the function (msg.sender)
+     * @param receiver Address that will receive the assets
+     * @param owner Address of the owner of the shares
+     * @param assets Amount of assets to withdraw
+     * @param shares Amount of shares to burn
      */
     function _withdraw(address caller, address receiver, address owner, uint256 assets, uint256 shares)
         internal
         override
     {
-        // Si caller != owner, reduce allowance (ERC4626 standard)
+        // If caller != owner, reduce allowance (ERC4626 standard)
         if (caller != owner) {
             _spendAllowance(owner, caller, shares);
         }
 
-        // Quema los shares del owner
+        // Burns the owner's shares
         _burn(owner, shares);
 
-        // Determina de donde retirar: idle buffer primero (gas efficient)
+        // Determines where to withdraw from: idle buffer first (gas efficient)
         uint256 from_idle = assets.min(idle_buffer);
         uint256 from_strategies = assets - from_idle;
 
-        // Retira desde idle buffer si hay disponible
+        // Withdraws from idle buffer if available
         if (from_idle > 0) {
             idle_buffer -= from_idle;
         }
 
-        // Si no hay suficiente en el idle buffer, retira proporcionalmente de estrategias
+        // If there is not enough in the idle buffer, withdraws proportionally from strategies
         if (from_strategies > 0) {
             IStrategyManager(strategy_manager).withdrawTo(from_strategies, address(this));
         }
 
-        // Obtiene el balance del vault que ya tiene todo el idle buffer + lo extraido de las
-        // estrategias si era neesario
+        // Gets the vault balance which already has all the idle buffer + what was extracted from
+        // strategies if necessary
         uint256 balance = IERC20(asset()).balanceOf(address(this));
 
-        // Calcula la cantidad a transferir al usuario, el mínimo entre el balance del vault y
-        // la cantidad a retirar por el usuario. Para asegurar que el vault no es insolvente
+        // Calculates the amount to transfer to the user, the minimum between the vault balance and
+        // the amount the user wants to withdraw. To ensure the vault is not insolvent
         uint256 to_transfer = assets.min(balance);
 
         /**
-         * Comprueba que la cantidad a transferir esté menos de 20 wei por debajo de lo esperado
+         * Checks that the amount to transfer is less than 20 wei below what was expected
          *
-         * Los protocolos externos (Aave, Compound...) redondean a la baja perdiendo ~1-2 wei por
-         * operación. Actualmente tenemos 2 estrategias, pero en el plan es ir aumentándolas
-         * Toleramos hasta 20 wei (2 wei × ~10 estrategias futuras = margen conservador)
+         * External protocols (Aave, Compound...) round down losing ~1-2 wei per
+         * operation. We currently have 2 strategies, but the plan is to keep adding more
+         * We tolerate up to 20 wei (2 wei × ~10 future strategies = conservative margin)
          *
-         * Si la diferencia excede 20 wei, tenemos un problema de accounting serio: el vault
-         * no tiene suficientes assets para redimir las shares emitidas (insolvencia = prison bars)
+         * If the difference exceeds 20 wei, we have a serious accounting problem: the vault
+         * does not have enough assets to redeem the issued shares (insolvency = prison bars)
          *
-         * Costo para el usuario: $0.00000000000005 con ETH a $2,500 (una mierda)
+         * Cost to the user: $0.00000000000005 with ETH at $2,500 (a shit amount)
          */
         if (to_transfer < assets) {
             require(assets - to_transfer < 20, "Excessive rounding");
         }
 
-        // Transfiere los assets al receiver
+        // Transfers the assets to the receiver
         IERC20(asset()).safeTransfer(receiver, to_transfer);
     }
 
     /**
-     * @notice Asigna assets idle a estrategias via strategy manager
-     * @dev Funcion interna llamada por deposit/mint cuando idle >= threshold o por allocateIdle()
+     * @notice Assigns idle assets to strategies via strategy manager
+     * @dev Internal function called by deposit/mint when idle >= threshold or by allocateIdle()
      */
     function _allocateIdle() internal {
-        // Guarda la cantidad a depositar en las estrategias y resetea el idle buffer
+        // Saves the amount to deposit into strategies and resets the idle buffer
         uint256 to_allocate = idle_buffer;
         idle_buffer = 0;
 
-        // Transfiere assets idle al strategy manager
+        // Transfers idle assets to the strategy manager
         IERC20(asset()).safeTransfer(strategy_manager, to_allocate);
 
-        // Llama al strategy manager para distribuir entre estrategias
+        // Calls the strategy manager to distribute among strategies
         IStrategyManager(strategy_manager).allocate(to_allocate);
 
-        // Emite evento de allocation de idle assets realizada
+        // Emits event for idle asset allocation performed
         emit IdleAllocated(to_allocate);
     }
 
     /**
-     * @notice Distribuye performance fees entre treasury y founder
-     * @dev Treasury recibe shares (auto-compound), founder recibe assets (liquid)
-     * @param perf_fee Cantidad total de performance fee a distribuir
+     * @notice Distributes performance fees between treasury and founder
+     * @dev Treasury receives shares (auto-compound), founder receives assets (liquid)
+     * @param perf_fee Total amount of performance fee to distribute
      */
     function _distributePerformanceFee(uint256 perf_fee) internal {
-        // Calcula las cantidades para el treasury y el founder
+        // Calculates the amounts for treasury and founder
         uint256 treasury_amount = (perf_fee * treasury_split) / BASIS_POINTS;
         uint256 founder_amount = (perf_fee * founder_split) / BASIS_POINTS;
 
-        // Treasury recibe shares (auto-compound, mejora el crecimiento del protocolo)
-        // Convierte assets a shares y las mintea al address del treasury
+        // Treasury receives shares (auto-compound, improves protocol growth)
+        // Converts assets to shares and mints them to the treasury address
         uint256 treasury_shares = convertToShares(treasury_amount);
         _mint(treasury_address, treasury_shares);
 
-        // Founder recibe el underlying asset directamente (de algo hay que vivir)
-        // Intenta retirar primero del idle buffer y si no hay suficiente, el restante de las estrategias
+        // Founder receives the underlying asset directly (gotta eat somehow)
+        // Tries to withdraw from idle buffer first, if not enough, the remainder from strategies
         if (founder_amount > idle_buffer) {
             uint256 to_withdraw = founder_amount - idle_buffer;
             IStrategyManager(strategy_manager).withdrawTo(to_withdraw, address(this));
@@ -833,10 +833,10 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
             idle_buffer -= founder_amount;
         }
 
-        // Transfiere assets al founder
+        // Transfers assets to the founder
         IERC20(asset()).safeTransfer(founder_address, founder_amount);
 
-        // Emite evento de distribucion de fees
+        // Emits fee distribution event
         emit PerformanceFeeDistributed(treasury_amount, founder_amount);
     }
 }

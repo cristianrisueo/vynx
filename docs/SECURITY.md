@@ -1,212 +1,212 @@
-# Consideraciones de Seguridad
+# Security Considerations
 
-Este documento analiza la postura de seguridad de VynX V2, incluyendo trust assumptions, vectores de ataque considerados, protecciones implementadas, puntos de centralización y limitaciones conocidas.
+This document analyzes the security posture of VynX V1, including trust assumptions, considered attack vectors, implemented protections, centralization points, and known limitations.
 
 ---
 
-## 1. Trust Assumptions (En Qué Confiamos)
+## 1. Trust Assumptions (What We Trust)
 
-El protocolo VynX V2 **confía explícitamente** en los siguientes componentes externos:
+The VynX V1 protocol **explicitly trusts** the following external components:
 
 ### Lido (staking protocol)
 
-**Nivel de confianza**: Alto
+**Trust level**: High
 
-**Razones:**
-- Protocolo de liquid staking más auditado de Ethereum
-- Battle-tested con >$30B TVL en mainnet
-- Bug bounty activo (Immunefi) y código verificado
-- Historial de seguridad robusto sin hacks críticos al protocolo base
+**Reasons:**
+- Most audited liquid staking protocol on Ethereum
+- Battle-tested with >$30B TVL on mainnet
+- Active bug bounty (Immunefi) and verified code
+- Robust security track record with no critical hacks on the base protocol
 
-**Riesgos aceptados:**
-- Si Lido sufre un exploit, los fondos stakeados como stETH/wstETH estarían en riesgo
-- Slashing de validadores reduce el balance de stETH (impacto histórico < 0.01% del supply)
-- Depeg de stETH en mercado secundario puede afectar swaps de salida
-- Mitigación: Solo el tier Balanced usa LidoStrategy/AaveStrategy. El idle buffer (8 ETH mínimo) absorbe retiros pequeños.
+**Accepted risks:**
+- If Lido suffers an exploit, funds staked as stETH/wstETH would be at risk
+- Validator slashing reduces the stETH balance (historical impact < 0.01% of supply)
+- stETH depeg on secondary market can affect exit swaps
+- Mitigation: Only the Balanced tier uses LidoStrategy/AaveStrategy. The idle buffer (8 ETH minimum) absorbs small withdrawals.
 
 ### Aave v3
 
-**Nivel de confianza**: Alto
+**Trust level**: High
 
-**Razones:**
-- Auditado múltiples veces por Trail of Bits, OpenZeppelin, Consensys Diligence, etc.
-- Battle-tested con >$5B TVL en mainnet durante años
-- Historial de seguridad robusto (sin hacks mayores)
-- Código open-source revisado por comunidad
+**Reasons:**
+- Audited multiple times by Trail of Bits, OpenZeppelin, Consensys Diligence, etc.
+- Battle-tested with >$5B TVL on mainnet for years
+- Robust security track record (no major hacks)
+- Open-source code reviewed by the community
 
-**Riesgos aceptados:**
-- Si Aave sufre un exploit, podríamos perder fondos depositados en AaveStrategy
-- AaveStrategy solo hace supply de wstETH (sin borrowing) — no existe riesgo de liquidación
-- Mitigación: Solo presente en tier Balanced; allocation limitada por parámetros del tier
+**Accepted risks:**
+- If Aave suffers an exploit, we could lose funds deposited in AaveStrategy
+- AaveStrategy only supplies wstETH (no borrowing) — no liquidation risk exists
+- Mitigation: Only present in the Balanced tier; allocation limited by tier parameters
 
 ### Curve (AMM + gauge)
 
-**Nivel de confianza**: Alto
+**Trust level**: High
 
-**Razones:**
-- AMM más establecido para activos correlacionados (stablecoins, LSTs)
-- Auditado extensivamente por múltiples firmas
-- El pool stETH/ETH usa Vyper >= 0.3.1 (no afectado por el bug de julio 2023)
-- Los gauges de Curve son aprobados por governance antes de ser activados
+**Reasons:**
+- Most established AMM for correlated assets (stablecoins, LSTs)
+- Extensively audited by multiple firms
+- The stETH/ETH pool uses Vyper >= 0.3.1 (not affected by the July 2023 bug)
+- Curve gauges are approved by governance before being activated
 
-**Riesgos aceptados:**
-- Si Curve sufre un exploit, los fondos en CurveStrategy (LP + gauge) estarían en riesgo
-- Impermanent loss bajo para el par stETH/ETH en condiciones normales
-- Mitigación: CurveStrategy opera en ambos tiers; diversificación con otras strategies
+**Accepted risks:**
+- If Curve suffers an exploit, funds in CurveStrategy (LP + gauge) would be at risk
+- Low impermanent loss for the stETH/ETH pair under normal conditions
+- Mitigation: CurveStrategy operates in both tiers; diversification with other strategies
 
 ### Uniswap V3 (concentrated liquidity)
 
-**Nivel de confianza**: Alto (usado por strategies para harvest Y como estrategia de liquidez concentrada)
+**Trust level**: High (used by strategies for harvest AND as a concentrated liquidity strategy)
 
-**Razones:**
-- DEX más establecido de Ethereum
-- Auditado extensivamente
-- Usado por miles de protocolos para swaps programáticos y provisión de liquidez
+**Reasons:**
+- Most established DEX on Ethereum
+- Extensively audited
+- Used by thousands of protocols for programmatic swaps and liquidity provision
 
-**Riesgos aceptados:**
-- UniswapV3Strategy: posición LP concentrada (±960 ticks WETH/USDC) puede salir de rango, dejando de generar fees
-- Swaps en harvest (CRV → stETH, AAVE rewards → wstETH) pueden sufrir slippage
-- Si no hay liquidez suficiente en los pools, harvest falla
-- MEV en swaps WETH↔USDC de UniswapV3Strategy (pool 0.05% tiene ~$500M TVL, impacto marginal)
-- Mitigación: Slippage max configurable, fail-safe en harvest, pool de alta liquidez
+**Accepted risks:**
+- UniswapV3Strategy: concentrated LP position (±960 ticks WETH/USDC) can go out of range, stopping fee generation
+- Swaps during harvest (CRV → stETH, AAVE rewards → wstETH) can suffer slippage
+- If there is insufficient liquidity in the pools, harvest fails
+- MEV on WETH↔USDC swaps in UniswapV3Strategy (0.05% pool has ~$500M TVL, marginal impact)
+- Mitigation: Configurable max slippage, fail-safe on harvest, high-liquidity pool
 
 ### wstETH wrapper (Lido)
 
-**Nivel de confianza**: Muy Alto
+**Trust level**: Very High
 
-**Razones:**
-- Contrato canónico de Lido para el wrapped stETH
-- Código simple y auditado: solo wrappea stETH en un token con exchange rate creciente
-- No tiene admin keys ni upgradeability significativa
-- Usado por miles de protocolos DeFi como colateral
+**Reasons:**
+- Canonical Lido contract for wrapped stETH
+- Simple and audited code: only wraps stETH into a token with a growing exchange rate
+- No admin keys or significant upgradeability
+- Used by thousands of DeFi protocols as collateral
 
-**Riesgos aceptados:**
-- Si el contrato wstETH tiene un bug, AaveStrategy y LidoStrategy se verían afectadas
-- Mitigación: El contrato wstETH lleva años en mainnet sin incidentes
+**Accepted risks:**
+- If the wstETH contract has a bug, AaveStrategy and LidoStrategy would be affected
+- Mitigation: The wstETH contract has been on mainnet for years without incidents
 
 ### OpenZeppelin Contracts
 
-**Nivel de confianza**: Muy Alto
+**Trust level**: Very High
 
-**Razones:**
-- Estándar de industria (ERC4626, ERC20, Ownable, Pausable)
-- Auditados exhaustivamente
-- Usados por miles de protocolos DeFi
+**Reasons:**
+- Industry standard (ERC4626, ERC20, Ownable, Pausable)
+- Exhaustively audited
+- Used by thousands of DeFi protocols
 
-**Componentes usados:**
-- `ERC4626`: Estándar de vault tokenizado
-- `SafeERC20`: Transferencias seguras de tokens
-- `Ownable`: Control de acceso admin
+**Components used:**
+- `ERC4626`: Tokenized vault standard
+- `SafeERC20`: Safe token transfers
+- `Ownable`: Admin access control
 - `Pausable`: Emergency stop
-- `Math`: Operaciones matemáticas seguras
+- `Math`: Safe mathematical operations
 
 ### WETH (Wrapped Ether)
 
-**Nivel de confianza**: Muy Alto
+**Trust level**: Very High
 
-**Razones:**
-- Contrato canónico de Ethereum
-- Código simple y auditado
-- No hay admin keys ni upgradeability
+**Reasons:**
+- Canonical Ethereum contract
+- Simple and audited code
+- No admin keys or upgradeability
 
 ---
 
-## 2. Vectores de Ataque Considerados
+## 2. Considered Attack Vectors
 
-El protocolo ha sido diseñado considerando los siguientes vectores de ataque comunes en DeFi:
+The protocol has been designed with the following common DeFi attack vectors in mind:
 
 ### 2.1 Reentrancy Attacks
 
-**Descripción**: Atacante llama recursivamente funciones antes de que el estado se actualice.
+**Description**: Attacker recursively calls functions before state is updated.
 
-**Protecciones implementadas:**
+**Implemented protections:**
 
 1. **CEI Pattern (Checks-Effects-Interactions)**
 ```solidity
-// CORRECTO: Quema shares ANTES de transferir assets
+// CORRECT: Burns shares BEFORE transferring assets
 function _withdraw(address caller, address receiver, address owner, uint256 assets, uint256 shares) internal {
-    _burn(owner, shares);                    // Effect (modifica estado)
-    // ... retiro de idle/strategies          // Interaction (external calls)
+    _burn(owner, shares);                    // Effect (modifies state)
+    // ... withdrawal from idle/strategies   // Interaction (external calls)
     IERC20(asset).safeTransfer(receiver, amount); // Interaction
 }
 ```
 
-2. **SafeERC20 para todas las transferencias**
+2. **SafeERC20 for all transfers**
 ```solidity
 using SafeERC20 for IERC20;
 
-IERC20(asset).safeTransfer(receiver, amount);     // No usa transfer() directo
-IERC20(asset).safeTransferFrom(user, vault, amt); // Maneja reverts correctamente
+IERC20(asset).safeTransfer(receiver, amount);     // Does not use transfer() directly
+IERC20(asset).safeTransferFrom(user, vault, amt); // Handles reverts correctly
 ```
 
-3. **No hay callbacks a usuarios**
-- El vault nunca llama funciones de usuarios (no hay hooks)
-- Solo interactúa con contratos conocidos (strategies, WETH, Uniswap, Lido, Aave, Curve)
+3. **No callbacks to users**
+- The vault never calls user functions (no hooks)
+- Only interacts with known contracts (strategies, WETH, Uniswap, Lido, Aave, Curve)
 
-**Evaluación**: Protegido
+**Evaluation**: Protected
 
 ---
 
-### 2.2 Front-Running de Rebalances
+### 2.2 Rebalance Front-Running
 
-**Descripción**: Atacante observa tx de rebalance pendiente y deposita justo antes para capturar beneficio inmediato.
+**Description**: Attacker observes a pending rebalance transaction and deposits just before it to capture immediate benefit.
 
-**Análisis:**
+**Analysis:**
 ```solidity
-// Escenario:
-// 1. Keeper llama rebalance() (mueve fondos a mejor estrategia)
-// 2. Atacante ve tx en mempool
-// 3. Atacante deposita con mayor gas price
-// 4. Rebalance ejecuta (aumenta APY efectivo)
-// 5. Atacante retira inmediatamente
+// Scenario:
+// 1. Keeper calls rebalance() (moves funds to better strategy)
+// 2. Attacker sees tx in mempool
+// 3. Attacker deposits with higher gas price
+// 4. Rebalance executes (increases effective APY)
+// 5. Attacker withdraws immediately
 
-// Resultado: Atacante captura parte del yield futuro
+// Result: Attacker captures part of the future yield
 ```
 
-**Mitigaciones implementadas:**
+**Implemented mitigations:**
 
-1. **Rebalance público sin permiso**
-   - Cualquiera puede ejecutar rebalance() si pasa shouldRebalance()
-   - No hay beneficio especial para el ejecutor
-   - MEV es mínimo (no hay arbitraje directo)
+1. **Permissionless public rebalance**
+   - Anyone can execute rebalance() if shouldRebalance() passes
+   - No special benefit for the executor
+   - MEV is minimal (no direct arbitrage)
 
-2. **Yield acumula con tiempo**
-   - Beneficio del rebalance se materializa durante semanas
-   - Atacante no puede "flash-rebalance-withdraw"
+2. **Yield accumulates over time**
+   - Rebalance benefit materializes over weeks
+   - Attacker cannot "flash-rebalance-withdraw"
 
-3. **Sin beneficio inmediato**
-   - El rebalance solo mueve fondos entre estrategias
-   - No genera profit instantáneo que se pueda extraer
+3. **No immediate benefit**
+   - Rebalance only moves funds between strategies
+   - Does not generate instant profit that can be extracted
 
-**Evaluación**: Mitigado (económicamente no-rentable)
+**Evaluation**: Mitigated (economically non-profitable)
 
 ---
 
 ### 2.3 Rounding Attacks (Inflation Attack)
 
-**Descripción**: Atacante manipula el precio share/asset donando assets para causar pérdidas por redondeo.
+**Description**: Attacker manipulates the share/asset price by donating assets to cause rounding losses.
 
-**Escenario clásico:**
+**Classic scenario:**
 ```solidity
-// 1. Atacante es primer depositor: deposit(1 wei)
+// 1. Attacker is first depositor: deposit(1 wei)
 //    shares = 1, totalAssets = 1
 //
-// 2. Atacante dona 1000 ETH directamente al vault (no via deposit)
+// 2. Attacker donates 1000 ETH directly to vault (not via deposit)
 //    totalAssets = 1000 ETH + 1 wei
 //
-// 3. Víctima deposita 2000 ETH
-//    shares = (2000 * 1) / 1000 = 2 shares (redondeo down)
+// 3. Victim deposits 2000 ETH
+//    shares = (2000 * 1) / 1000 = 2 shares (round down)
 //    totalAssets = 3000 ETH
 //
-// 4. Atacante redeem(1 share)
+// 4. Attacker redeem(1 share)
 //    assets = (1 * 3000) / 3 = 1000 ETH
 //
-// Resultado: Atacante robó 1000 ETH de víctima
+// Result: Attacker stole 1000 ETH from victim
 ```
 
-**Protecciones implementadas:**
+**Implemented protections:**
 
-1. **Depósito mínimo de 0.01 ETH**
+1. **Minimum deposit of 0.01 ETH**
 ```solidity
 uint256 public min_deposit = 0.01 ether;
 
@@ -216,352 +216,352 @@ function deposit(uint256 assets, address receiver) public {
 }
 ```
 
-**Análisis de coste de ataque:**
-- Para hacer ataque rentable, atacante necesitaría donar >100 ETH
-- Primer depósito es 0.01 ETH (no 1 wei)
-- Ratio share/asset no puede ser manipulado eficientemente
-- Coste del ataque > beneficio potencial
+**Attack cost analysis:**
+- To make the attack profitable, attacker would need to donate >100 ETH
+- First deposit is 0.01 ETH (not 1 wei)
+- The share/asset ratio cannot be efficiently manipulated
+- Attack cost > potential gain
 
-2. **ERC4626 estándar de OpenZeppelin**
-- Implementación auditada con protecciones conocidas
+2. **OpenZeppelin standard ERC4626**
+- Audited implementation with known protections
 
-**Evaluación**: Protegido (coste de ataque prohibitivo)
+**Evaluation**: Protected (prohibitive attack cost)
 
 ---
 
 ### 2.4 Flash Loan Attacks
 
-**Descripción**: Atacante toma préstamo flash para manipular precio o estado del vault.
+**Description**: Attacker takes a flash loan to manipulate the price or state of the vault.
 
-**Análisis de aplicabilidad:**
+**Applicability analysis:**
 
-1. **No hay oracle de precios**
-   - El vault no usa precios externos para sus operaciones internas
-   - APY de estrategias viene de protocolos subyacentes (Lido/Aave/Curve/Uniswap)
-   - No se puede manipular APY con flash loans
+1. **No price oracle**
+   - The vault does not use external prices for its internal operations
+   - Strategy APY comes from underlying protocols (Lido/Aave/Curve/Uniswap)
+   - APY cannot be manipulated with flash loans
 
-2. **No hay weighted voting por shares**
-   - Shares solo determinan proporción de assets
-   - No hay governance atacable con flash loans
+2. **No share-weighted voting**
+   - Shares only determine the proportion of assets
+   - There is no governance attackable with flash loans
 
-3. **Sin arbitraje instantáneo**
-   - No hay withdrawal fee ni forma de extraer valor en una transacción
-   - Flash loan → deposit → withdraw retorna lo mismo (menos rounding wei)
+3. **No instant arbitrage**
+   - No withdrawal fee or way to extract value in a single transaction
+   - Flash loan → deposit → withdraw returns the same (minus rounding wei)
 
-**Escenarios considerados:**
+**Considered scenarios:**
 ```solidity
-// NO POSIBLE: Manipular APY
-// APY viene de protocolos subyacentes directamente
-// Flash loan no puede cambiar el exchange rate de stETH o el APY de Aave
+// NOT POSSIBLE: Manipulate APY
+// APY comes directly from underlying protocols
+// Flash loan cannot change the stETH exchange rate or Aave APY
 
-// NO POSIBLE: Arbitrar precio share/asset
-// deposit y withdraw son simétricos (ERC4626 standard)
+// NOT POSSIBLE: Arbitrage share/asset price
+// deposit and withdraw are symmetric (ERC4626 standard)
 
-// NO POSIBLE: Votación con shares prestadas
-// No existe sistema de governance
+// NOT POSSIBLE: Vote with borrowed shares
+// No governance system exists
 ```
 
-**Evaluación**: No aplicable (sin vectores de ataque viables)
+**Evaluation**: Not applicable (no viable attack vectors)
 
 ---
 
 ### 2.5 Keeper Incentive Risks
 
-**Descripción**: Riesgos asociados al sistema de keeper incentive y harvest público.
+**Description**: Risks associated with the keeper incentive system and public harvest.
 
-**Vectores considerados:**
+**Considered vectors:**
 
-1. **Spam de harvest() cuando no hay rewards**
+1. **harvest() spam when there are no rewards**
 ```solidity
-// Escenario: Atacante llama harvest() repetidamente
-// Resultado: profit < min_profit_for_harvest → return 0
-// No se paga incentivo, no se distribuyen fees
-// Solo gas wasted por el atacante
+// Scenario: Attacker calls harvest() repeatedly
+// Result: profit < min_profit_for_harvest → return 0
+// No incentive is paid, no fees are distributed
+// Only gas wasted by the attacker
 
-// Protección (V2):
+// Protection (V1):
 // Tier Balanced: min_profit_for_harvest = 0.08 ETH
 // Tier Aggressive: min_profit_for_harvest = 0.12 ETH
-// Si profit < threshold del tier, harvest no ejecuta distribución
+// If profit < tier threshold, harvest does not execute distribution
 ```
 
-2. **Front-running de harvest**
+2. **harvest front-running**
 ```solidity
-// Escenario: Keeper A ve que hay rewards acumulados
-// Atacante B front-runs harvest() con gas más alto
-// Resultado: Atacante B recibe 1% keeper incentive
-// Keeper A gasta gas sin recibir nada
+// Scenario: Keeper A sees accumulated rewards
+// Attacker B front-runs harvest() with higher gas
+// Result: Attacker B receives 1% keeper incentive
+// Keeper A spends gas without receiving anything
 
-// Mitigación: Este es el diseño esperado — MEV normal
-// El 1% incentive es suficientemente bajo para no ser muy rentable de front-runear
-// Keepers oficiales no compiten por incentive
+// Mitigation: This is the expected design — normal MEV
+// The 1% incentive is low enough that front-running is not very profitable
+// Official keepers do not compete for the incentive
 ```
 
-3. **Keeper oficial malicioso**
+3. **Malicious official keeper**
 ```solidity
-// Escenario: Owner marca una address como oficial
-// Keeper oficial harvesta sin pagar incentive
-// Resultado: Más profit para el protocolo, no para keeper
+// Scenario: Owner marks an address as official
+// Official keeper harvests without paying incentive
+// Result: More profit for the protocol, not for keeper
 
-// No es un riesgo — es una feature
-// Keepers oficiales son del protocolo y no necesitan incentivo
+// Not a risk — it is a feature
+// Official keepers belong to the protocol and do not need incentive
 ```
 
-**Evaluación**: Mitigado (spam no-rentable, MEV esperado y tolerable)
+**Evaluation**: Mitigated (spam non-profitable, MEV expected and tolerable)
 
 ---
 
 ### 2.6 Uniswap Swap Risks
 
-**Descripción**: Riesgos asociados a swaps en Uniswap V3, tanto para harvest como para la UniswapV3Strategy.
+**Description**: Risks associated with swaps on Uniswap V3, both for harvest and for UniswapV3Strategy.
 
-**Vectores considerados:**
+**Considered vectors:**
 
-1. **Sandwich attack en swaps de harvest**
+1. **Sandwich attack on harvest swaps**
 ```solidity
-// Escenario:
-// 1. Bot detecta harvest() con swap grande en mempool (CRV→stETH, AAVE rewards→wstETH)
-// 2. Front-runs: compra el token de destino
-// 3. harvest() ejecuta swap (peor precio por impacto)
-// 4. Back-runs: vende
+// Scenario:
+// 1. Bot detects harvest() with large swap in mempool (CRV→stETH, AAVE rewards→wstETH)
+// 2. Front-runs: buys the destination token
+// 3. harvest() executes swap (worse price due to impact)
+// 4. Back-runs: sells
 
-// Mitigación: MAX_SLIPPAGE_BPS = 100 (1% max)
-// Si el sandwich causa > 1% slippage, la tx revierte
+// Mitigation: MAX_SLIPPAGE_BPS = 100 (1% max)
+// If the sandwich causes > 1% slippage, the tx reverts
 uint256 min_amount_out = (claimed * 9900) / 10000;
 ```
 
-2. **Sandwich attack en swaps WETH↔USDC de UniswapV3Strategy**
+2. **Sandwich attack on WETH↔USDC swaps in UniswapV3Strategy**
 ```solidity
-// Escenario: deposit/withdraw/harvest de UniswapV3Strategy requiere swap
-// Bot front-runs el swap WETH→USDC o USDC→WETH
+// Scenario: deposit/withdraw/harvest of UniswapV3Strategy requires a swap
+// Bot front-runs the WETH→USDC or USDC→WETH swap
 
-// Mitigación: Pool WETH/USDC 0.05% tiene ~$500M TVL
-// El slippage por frontrunning en operaciones típicas del vault es marginal
-// Nota: UniswapV3Strategy NO usa slippage protection explícita en swaps internos
-// Este riesgo está aceptado y documentado en la sección "Riesgos por Estrategia"
+// Mitigation: WETH/USDC 0.05% pool has ~$500M TVL
+// Slippage from front-running on typical vault operations is marginal
+// Note: UniswapV3Strategy does NOT use explicit slippage protection on internal swaps
+// This risk is accepted and documented in the "Risks per Strategy" section
 ```
 
-3. **Pool con baja liquidez**
+3. **Pool with low liquidity**
 ```solidity
-// Escenario: Pool de reward tokens (CRV/WETH, AAVE/WETH) tiene poca liquidez
-// harvest swap obtiene mal precio o revierte
+// Scenario: Reward token pool (CRV/WETH, AAVE/WETH) has little liquidity
+// harvest swap gets a bad price or reverts
 
-// Mitigación:
-// - Pools de reward tokens son altamente líquidos en mainnet
-// - Si swap revierte, fail-safe de StrategyManager continúa con otras estrategias
-// - El profit no se pierde, solo se pospone al siguiente harvest
+// Mitigation:
+// - Reward token pools are highly liquid on mainnet
+// - If swap reverts, StrategyManager fail-safe continues with other strategies
+// - Profit is not lost, only deferred to the next harvest
 ```
 
-**Evaluación**: Mitigado (slippage protection + fail-safe)
+**Evaluation**: Mitigated (slippage protection + fail-safe)
 
 ---
 
 ### 2.7 Router Specific Risks
 
-**Descripción**: Riesgos únicos del Router periférico multi-token.
+**Description**: Unique risks of the peripheral multi-token Router.
 
-**Vectores considerados:**
+**Considered vectors:**
 
 1. **Reentrancy via receive()**
 ```solidity
-// Escenario: Atacante intenta reentrar durante zapWithdrawETH
-// cuando el Router llama .call{value}(eth_out) al atacante
+// Scenario: Attacker tries to reenter during zapWithdrawETH
+// when the Router calls .call{value}(eth_out) to the attacker
 
-// Mitigación implementada:
-// - ReentrancyGuard en TODAS las funciones públicas (zapDeposit*, zapWithdraw*)
-// - receive() solo acepta ETH del WETH contract (revert si msg.sender != weth)
-// - CEI pattern: balance checks al final
+// Implemented mitigation:
+// - ReentrancyGuard on ALL public functions (zapDeposit*, zapWithdraw*)
+// - receive() only accepts ETH from the WETH contract (revert if msg.sender != weth)
+// - CEI pattern: balance checks at the end
 ```
 
-2. **Fondos atrapados en Router**
+2. **Funds stuck in Router**
 ```solidity
-// Escenario: Bug en código deja WETH/ERC20 en el Router
+// Scenario: Bug in code leaves WETH/ERC20 in the Router
 
-// Mitigación implementada:
-// - Balance check al final de cada función:
+// Implemented mitigation:
+// - Balance check at the end of each function:
 //   if (IERC20(weth).balanceOf(address(this)) != 0) revert Router__FundsStuck();
-// - Para zapWithdrawERC20:
+// - For zapWithdrawERC20:
 //   if (IERC20(token_out).balanceOf(address(this)) != 0) revert Router__FundsStuck();
-// - Si check falla, tx revierte completamente (no hay fondos atrapados)
+// - If check fails, tx reverts completely (no funds are stuck)
 ```
 
-3. **Sandwich attacks en swaps del Router**
+3. **Sandwich attacks on Router swaps**
 ```solidity
-// Escenario: MEV bot detecta zapDepositERC20 grande
-// Front-runs comprando WETH, usuario paga peor precio, back-runs vendiendo
+// Scenario: MEV bot detects a large zapDepositERC20
+// Front-runs buying WETH, user pays worse price, back-runs selling
 
-// Mitigación parcial:
-// - Usuario especifica min_weth_out (protección de slippage)
-// - Si el sandwich excede slippage tolerance, tx revierte
-// - Limitación: Usuario aún es vulnerable a sandwich dentro del slippage permitido
-// - Recomendación: Frontends deben calcular min_weth_out conservador (0.5-1% del quote)
+// Partial mitigation:
+// - User specifies min_weth_out (slippage protection)
+// - If the sandwich exceeds slippage tolerance, tx reverts
+// - Limitation: User is still vulnerable to sandwich within the allowed slippage
+// - Recommendation: Frontends should calculate a conservative min_weth_out (0.5-1% of quote)
 ```
 
-4. **WETH como intermediario (doble slippage)**
+4. **WETH as intermediary (double slippage)**
 ```solidity
-// Escenario: Depositar USDC → WETH (slippage 0.1%) → Vault
-//            Retirar Vault → WETH → DAI (slippage 0.1%)
-// Total slippage: ~0.2% (dos swaps)
+// Scenario: Deposit USDC → WETH (0.1% slippage) → Vault
+//           Withdraw Vault → WETH → DAI (0.1% slippage)
+// Total slippage: ~0.2% (two swaps)
 
-// Trade-off aceptado:
-// - WETH como hub es estándar en DeFi (máxima liquidez)
-// - Alternativa (swap directo USDC → DAI) tendría peor liquidez
-// - Usuario explícitamente acepta slippage con min_weth_out / min_token_out
+// Accepted trade-off:
+// - WETH as hub is standard in DeFi (maximum liquidity)
+// - Alternative (direct USDC → DAI swap) would have worse liquidity
+// - User explicitly accepts slippage with min_weth_out / min_token_out
 ```
 
-**Evaluación**: Mitigado (ReentrancyGuard, stateless checks, slippage protection)
+**Evaluation**: Mitigated (ReentrancyGuard, stateless checks, slippage protection)
 
 ### 2.8 Withdrawal Rounding
 
-**Descripción**: Protocolos externos (Aave, Curve, Uniswap V3) redondean withdrawals a la baja, causando micro-diferencias entre assets solicitados y recibidos.
+**Description**: External protocols (Aave, Curve, Uniswap V3) round withdrawals down, causing micro-differences between assets requested and received.
 
-**Análisis técnico:**
+**Technical analysis:**
 ```solidity
-// Aave v3: aave_pool.withdraw() puede devolver assets - 1 wei
-// Curve: remove_liquidity_one_coin puede devolver assets - 1 o -2 wei
-// Uniswap V3: decreaseLiquidity puede tener rounding de 1 wei
+// Aave v3: aave_pool.withdraw() may return assets - 1 wei
+// Curve: remove_liquidity_one_coin may return assets - 1 or -2 wei
+// Uniswap V3: decreaseLiquidity may have 1 wei rounding
 
-// Pattern general en strategies:
+// General pattern in strategies:
 uint256 balance_before = IERC20(asset).balanceOf(address(this));
 // ... external call (Aave withdraw, Curve remove, Uniswap decreaseLiquidity)
 uint256 balance_after = IERC20(asset).balanceOf(address(this));
 uint256 actual_withdrawn = balance_after - balance_before;
-// actual_withdrawn puede ser assets - 1 o assets - 2
+// actual_withdrawn may be assets - 1 or assets - 2
 ```
 
-**Tolerancia en Vault:**
+**Vault tolerance:**
 ```solidity
-// Vault acepta hasta 20 wei de diferencia
+// Vault accepts up to 20 wei of difference
 if (to_transfer < assets) {
     require(assets - to_transfer < 20, "Excessive rounding");
 }
 
-// ¿Por qué 20 wei?
-// - 4 estrategias en V2 × ~2 wei/operación = ~8 wei
-// - Margen conservador para operaciones multi-strategy: ~20 wei
-// - Costo para usuario: ~$0.00000000000005 con ETH a $2,500
+// Why 20 wei?
+// - 4 strategies in V1 × ~2 wei/operation = ~8 wei
+// - Conservative margin for multi-strategy operations: ~20 wei
+// - Cost to user: ~$0.00000000000005 with ETH at $2,500
 ```
 
-**¿Puede un atacante explotar esto?**
+**Can an attacker exploit this?**
 ```solidity
-// NO: 20 wei es insignificante (~$0.00000000000005)
-// NO: El rounding siempre beneficia al protocolo (redondeo a la baja)
-// NO: No hay acumulación de rounding errors entre operaciones
-// El rounding se resuelve por operación, no se propaga
+// NO: 20 wei is insignificant (~$0.00000000000005)
+// NO: Rounding always benefits the protocol (rounds down)
+// NO: No accumulation of rounding errors between operations
+// Rounding is resolved per operation, it does not propagate
 ```
 
-**Evaluación**: Tolerado deliberadamente (costo trivial, estándar en DeFi)
+**Evaluation**: Deliberately tolerated (trivial cost, DeFi standard)
 
 ---
 
-## 3. Riesgos por Estrategia
+## 3. Risks per Strategy
 
 ### LidoStrategy
 
-**Riesgo 1: Slashing de Validadores**
-- Descripción: Si los validadores de Lido son penalizados (slashing), el saldo de stETH disminuye. El impacto típico histórico ha sido < 0.01% del supply.
-- Mitigación en V2: Solo el tier Balanced usa LidoStrategy. El idle buffer (8 ETH mínimo) absorbe retiros pequeños sin tocar stETH.
+**Risk 1: Validator Slashing**
+- Description: If Lido validators are penalized (slashing), the stETH balance decreases. Typical historical impact has been < 0.01% of supply.
+- Mitigation in V1: Only the Balanced tier uses LidoStrategy. The idle buffer (8 ETH minimum) absorbs small withdrawals without touching stETH.
 
-**Riesgo 2: Depeg stETH/ETH**
-- Descripción: stETH puede cotizar por debajo de ETH en mercado secundario. Históricamente < 1.5% en condiciones normales. En junio 2022, el depeg llegó al 6-7% por presión de venta de Celsius.
-- Mitigación en V2: LidoStrategy usa Uniswap V3 para withdraw (swap wstETH→WETH). Si el slippage supera el límite configurado, el withdraw falla con revert. El protocolo NO fuerza swaps con slippage alto.
+**Risk 2: stETH/ETH Depeg**
+- Description: stETH can trade below ETH on secondary markets. Historically < 1.5% under normal conditions. In June 2022, the depeg reached 6-7% due to Celsius sell pressure.
+- Mitigation in V1: LidoStrategy uses Uniswap V3 for withdrawal (swap wstETH→WETH). If slippage exceeds the configured limit, the withdrawal fails with a revert. The protocol does NOT force swaps with high slippage.
 
-**Riesgo 3: Smart Contract Risk de Lido**
-- Descripción: Un exploit en el contrato Lido afectaría todos los activos stakeados.
-- Mitigación: Lido es el protocolo de liquid staking más auditado de Ethereum, con bug bounty activo y código verificado.
+**Risk 3: Lido Smart Contract Risk**
+- Description: An exploit in the Lido contract would affect all staked assets.
+- Mitigation: Lido is the most audited liquid staking protocol on Ethereum, with an active bug bounty and verified code.
 
 ### AaveStrategy (wstETH)
 
-**Riesgo 1: Riesgo Apilado (Stacking Risk)**
-- Descripción: AaveStrategy combina dos fuentes de riesgo de protocolo: Lido (staking) + Aave v3 (lending). Un exploit en cualquiera de los dos afecta los fondos.
-- Mitigación: Ambos protocolos son tier-1 con auditorías múltiples. La posición en Aave es solo supply (sin borrowing), eliminando riesgo de liquidación.
+**Risk 1: Stacking Risk**
+- Description: AaveStrategy combines two sources of protocol risk: Lido (staking) + Aave v3 (lending). An exploit in either one affects the funds.
+- Mitigation: Both protocols are tier-1 with multiple audits. The position in Aave is supply-only (no borrowing), eliminating liquidation risk.
 
-**Riesgo 2: Liquidación en Aave (no aplica en V2)**
-- Nota: AaveStrategy solo hace supply de wstETH, sin borrowing. No existe deuda ni ratio de colateralización que liquidar. El único riesgo es si Aave congela el mercado wstETH (puede ocurrir por governance).
+**Risk 2: Liquidation in Aave (not applicable in V1)**
+- Note: AaveStrategy only supplies wstETH, with no borrowing. There is no debt or collateralization ratio to liquidate. The only risk is if Aave freezes the wstETH market (can occur through governance).
 
-**Riesgo 3: Oracle Manipulation (Aave)**
-- Descripción: Si el oracle de precio de wstETH en Aave es manipulado, podría afectar los cálculos de disponibilidad de fondos.
-- Mitigación: Aave v3 usa Chainlink oracles con circuit breakers. El protocolo V2 no depende del valor en USD de wstETH para sus operaciones internas.
+**Risk 3: Oracle Manipulation (Aave)**
+- Description: If the wstETH price oracle in Aave is manipulated, it could affect the fund availability calculations.
+- Mitigation: Aave v3 uses Chainlink oracles with circuit breakers. The V1 protocol does not depend on the USD value of wstETH for its internal operations.
 
 ### CurveStrategy
 
-**Riesgo 1: Impermanent Loss (bajo)**
-- Descripción: El pool stETH/ETH tiene par altamente correlacionado. El IL teórico es muy bajo bajo condiciones normales (< 0.5% anual históricamente).
-- Escenario de riesgo: Un depeg severo de stETH (>5%) materializa IL significativo para LPs.
+**Risk 1: Impermanent Loss (low)**
+- Description: The stETH/ETH pool has a highly correlated pair. Theoretical IL is very low under normal conditions (< 0.5% annually historically).
+- Risk scenario: A severe stETH depeg (>5%) materializes significant IL for LPs.
 
-**Riesgo 2: Exploit Histórico de Curve (julio 2023)**
-- Descripción: En julio 2023, pools de Curve con Vyper <= 0.3.0 fueron vulnerables a reentrancy. El pool stETH/ETH NO fue afectado directamente, pero el evento causó panic selling y IL temporal.
-- Estado en V2: El bug fue parchado en Vyper >= 0.3.1. CurveStrategy interactúa con el pool stETH/ETH que usa Vyper >= 0.3.1.
+**Risk 2: Historical Curve Exploit (July 2023)**
+- Description: In July 2023, Curve pools with Vyper <= 0.3.0 were vulnerable to reentrancy. The stETH/ETH pool was NOT directly affected, but the event caused panic selling and temporary IL.
+- Status in V1: The bug was patched in Vyper >= 0.3.1. CurveStrategy interacts with the stETH/ETH pool which uses Vyper >= 0.3.1.
 
-**Riesgo 3: Smart Contract Risk del Gauge**
-- Descripción: Los fondos LP se stakean en el Curve gauge para recibir CRV. Un exploit en el gauge afectaría los fondos stakeados.
-- Mitigación: Los gauges de Curve son auditados y el gaugeController requiere aprobación de governance para nuevos gauges.
+**Risk 3: Gauge Smart Contract Risk**
+- Description: LP funds are staked in the Curve gauge to receive CRV. An exploit in the gauge would affect staked funds.
+- Mitigation: Curve gauges are audited and the gaugeController requires governance approval for new gauges.
 
 ### UniswapV3Strategy
 
-**Riesgo 1: Impermanent Loss Concentrado**
-- Descripción: La liquidez concentrada (±10% del precio actual) amplifica el IL comparado con Uniswap V2. Si el precio de WETH/USDC se mueve significativamente dentro del rango, el IL puede ser sustancial.
-- Mitigación: El rango ±960 ticks (~±10%) es amplio para el par WETH/USDC. Las fees del 0.05% mitigan el IL en condiciones normales.
+**Risk 1: Concentrated Impermanent Loss**
+- Description: Concentrated liquidity (±10% of current price) amplifies IL compared to Uniswap V2. If the WETH/USDC price moves significantly within range, IL can be substantial.
+- Mitigation: The ±960 tick range (~±10%) is wide for the WETH/USDC pair. The 0.05% fees mitigate IL under normal conditions.
 
-**Riesgo 2: Out-of-Range (Posición Sin Fees)**
-- Descripción: Si el precio de WETH/USDC sale del rango ±10%, la posición deja de generar fees. Los activos permanecen en el pool pero no reciben ingresos hasta que el precio vuelva al rango.
-- Comportamiento en V2: UniswapV3Strategy NO hace rebalancing automático de posición. Una posición out-of-range continúa contabilizada en totalAssets() pero sin generar APY.
+**Risk 2: Out-of-Range (Position Without Fees)**
+- Description: If the WETH/USDC price exits the ±10% range, the position stops generating fees. Assets remain in the pool but receive no income until the price returns to range.
+- Behavior in V1: UniswapV3Strategy does NOT automatically rebalance the position. An out-of-range position continues to be counted in totalAssets() but generates no APY.
 
-**Riesgo 3: MEV en Swaps WETH↔USDC**
-- Descripción: Cada deposit, withdraw y harvest implica un swap en Uniswap V3 (WETH→USDC en deposit, USDC→WETH en withdraw/harvest). Estos swaps son visibles en el mempool y pueden ser frontrunned.
-- Mitigación: El pool WETH/USDC 0.05% tiene alta liquidez (~$500M TVL). El slippage por frontrunning en operaciones típicas del vault es marginal. UniswapV3Strategy NO usa slippage protection explícita en los swaps internos — este es un riesgo aceptado para simplificar el contrato.
+**Risk 3: MEV on WETH↔USDC Swaps**
+- Description: Each deposit, withdrawal and harvest involves a swap on Uniswap V3 (WETH→USDC on deposit, USDC→WETH on withdrawal/harvest). These swaps are visible in the mempool and can be front-run.
+- Mitigation: The WETH/USDC 0.05% pool has high liquidity (~$500M TVL). Slippage from front-running on typical vault operations is marginal. UniswapV3Strategy does NOT use explicit slippage protection on internal swaps — this is an accepted risk to simplify the contract.
 
-**Riesgo 4: Posición como NFT (tokenId)**
-- Descripción: La posición LP de UniswapV3Strategy está representada como un NFT (tokenId). Si el NFT se pierde o transfiere accidentalmente, los fondos quedan inaccesibles.
-- Mitigación: El tokenId es almacenado en estado por UniswapV3Strategy. La transferencia del NFT solo puede hacerla el contrato mismo (es el owner). No hay función de transferencia de NFT expuesta.
+**Risk 4: Position as NFT (tokenId)**
+- Description: The UniswapV3Strategy LP position is represented as an NFT (tokenId). If the NFT is lost or accidentally transferred, the funds become inaccessible.
+- Mitigation: The tokenId is stored in state by UniswapV3Strategy. The NFT transfer can only be done by the contract itself (it is the owner). No NFT transfer function is exposed.
 
 ---
 
-## 4. Protecciones Implementadas
+## 4. Implemented Protections
 
-### 4.1 Control de Acceso
+### 4.1 Access Control
 
-**Modificadores usados:**
+**Modifiers used:**
 
 ```solidity
 // Vault
-modifier onlyOwner()        // Funciones admin (pause, setters, syncIdleBuffer)
+modifier onlyOwner()        // Admin functions (pause, setters, syncIdleBuffer)
 modifier whenNotPaused()    // Deposits, mint, harvest, allocateIdle
-//                          // withdraw y redeem NO tienen whenNotPaused:
-//                          // los usuarios siempre pueden retirar sus fondos
+//                          // withdraw and redeem do NOT have whenNotPaused:
+//                          // users can always withdraw their funds
 
 // StrategyManager
-modifier onlyOwner()        // Agregar/remover strategies, setters
+modifier onlyOwner()        // Add/remove strategies, setters
 modifier onlyVault()        // allocate(), withdrawTo(), harvest()
 
 // Strategies
 modifier onlyManager()      // deposit(), withdraw(), harvest()
 ```
 
-**Jerarquía de permisos:**
+**Permission hierarchy:**
 ```
-Owner del Vault
+Vault Owner
   ↓
-Vault (contrato)
-  ↓ (solo vault puede llamar)
-StrategyManager (contrato)
-  ↓ (solo manager puede llamar)
-Strategies (contratos)
+Vault (contract)
+  ↓ (only vault can call)
+StrategyManager (contract)
+  ↓ (only manager can call)
+Strategies (contracts)
   ↓
-Protocolos externos (Lido/Aave/Curve/Uniswap V3)
+External protocols (Lido/Aave/Curve/Uniswap V3)
 ```
 
 ---
 
 ### 4.2 Circuit Breakers
 
-| Parámetro | Balanced | Aggressive |
+| Parameter | Balanced | Aggressive |
 |---|---|---|
 | `max_tvl` | 1000 ETH | 1000 ETH |
 | `idle_threshold` | 8 ETH | 12 ETH |
 | `min_profit_for_harvest` | 0.08 ETH | 0.12 ETH |
 | `rebalance_threshold` | 2% (200 bp) | 3% (300 bp) |
 
-El `max_tvl` previene que el vault escale indefinidamente, limitando el riesgo sistémico en protocolos subyacentes. El `idle_threshold` garantiza que siempre haya liquidez inmediata para retiros sin necesidad de interactuar con protocolos externos.
+The `max_tvl` prevents the vault from scaling indefinitely, limiting systemic risk in underlying protocols. The `idle_threshold` guarantees there is always immediate liquidity for withdrawals without needing to interact with external protocols.
 
 **1. Max TVL (Vault)**
 ```solidity
@@ -575,10 +575,10 @@ function deposit(uint256 assets, address receiver) public {
 }
 ```
 
-**Propósito:**
-- Limita exposición total del protocolo
-- Útil durante fase de testeo/auditoría
-- Owner puede aumentar cuando sea seguro
+**Purpose:**
+- Limits total protocol exposure
+- Useful during testing/audit phase
+- Owner can increase when safe to do so
 
 ---
 
@@ -594,18 +594,18 @@ function deposit(uint256 assets, address receiver) public {
 }
 ```
 
-**Propósitos:**
-- **Anti-spam**: Previene muchos depósitos pequeños que acumulan gas
-- **Anti-rounding attack**: Hace rounding attacks prohibitivamente caros
+**Purposes:**
+- **Anti-spam**: Prevents many small deposits that accumulate gas
+- **Anti-rounding attack**: Makes rounding attacks prohibitively expensive
 
 ---
 
-**3. Idle Threshold (por Tier)**
+**3. Idle Threshold (per Tier)**
 ```solidity
 // Tier Balanced: idle_threshold = 8 ETH
 // Tier Aggressive: idle_threshold = 12 ETH
-// Fondos por debajo del threshold permanecen en idle (sin invertir)
-// Garantizan liquidez inmediata para retiros sin tocar protocolos externos
+// Funds below the threshold remain in idle (uninvested)
+// Guarantees immediate liquidity for withdrawals without touching external protocols
 ```
 
 ---
@@ -615,22 +615,22 @@ function deposit(uint256 assets, address receiver) public {
 uint256 public constant MAX_STRATEGIES = 10;  // Hard-coded
 ```
 
-**Propósito:**
-- Previene gas DoS en loops de allocate/withdrawTo/harvest/rebalance
-- Con 10 estrategias, cada loop tiene coste predecible
+**Purpose:**
+- Prevents gas DoS in allocate/withdrawTo/harvest/rebalance loops
+- With 10 strategies, each loop has a predictable cost
 
 ---
 
-**5. Min Profit for Harvest (por Tier)**
+**5. Min Profit for Harvest (per Tier)**
 ```solidity
 // Tier Balanced: min_profit_for_harvest = 0.08 ETH
 // Tier Aggressive: min_profit_for_harvest = 0.12 ETH
 ```
 
-**Propósito:**
-- Previene harvest no-rentables (gas > profit)
-- Previene spam de harvest() por atacantes
-- El threshold mayor del tier Aggressive refleja el mayor coste de sus operaciones (posiciones Uniswap V3)
+**Purpose:**
+- Prevents unprofitable harvests (gas > profit)
+- Prevents harvest() spam by attackers
+- The higher threshold for the Aggressive tier reflects the higher cost of its operations (Uniswap V3 positions)
 
 ---
 
@@ -640,8 +640,8 @@ uint256 public constant MAX_STRATEGIES = 10;  // Hard-coded
 contract Vault is IVault, ERC4626, Ownable, Pausable {
     function deposit(...) public whenNotPaused { }
     function mint(...) public whenNotPaused { }
-    function withdraw(...) public override { }              // SIN whenNotPaused
-    function redeem(...) public override { }                // SIN whenNotPaused
+    function withdraw(...) public override { }              // WITHOUT whenNotPaused
+    function redeem(...) public override { }                // WITHOUT whenNotPaused
     function harvest() external whenNotPaused { }
     function allocateIdle() external whenNotPaused { }
 
@@ -650,703 +650,703 @@ contract Vault is IVault, ERC4626, Ownable, Pausable {
 }
 ```
 
-**Cuándo usar:**
-- Se detecta vulnerabilidad en vault o estrategias
-- Hack en Lido/Aave/Curve/Uniswap afecta fondos
-- Bug crítico en weighted allocation o harvest
-- Mientras se investiga comportamiento anómalo
-- **Primer paso de la secuencia de emergency exit** (ver sección 4.8)
+**When to use:**
+- A vulnerability is detected in vault or strategies
+- Hack in Lido/Aave/Curve/Uniswap affects funds
+- Critical bug in weighted allocation or harvest
+- While investigating anomalous behavior
+- **First step of the emergency exit sequence** (see section 4.8)
 
-**Qué pausa:**
-- Nuevos deposits (deposit, mint)
+**What it pauses:**
+- New deposits (deposit, mint)
 - Harvest
 - AllocateIdle
-- No pausa rebalances (manager está separado)
+- Does not pause rebalances (manager is separate)
 
-**Qué NO pausa (por diseño):**
-- **withdraw**: Los usuarios siempre pueden retirar sus fondos
-- **redeem**: Los usuarios siempre pueden quemar shares y recuperar assets
+**What it does NOT pause (by design):**
+- **withdraw**: Users can always withdraw their funds
+- **redeem**: Users can always burn shares and recover assets
 
-**Principio DeFi**: La pausa bloquea inflows (depósitos) y operaciones del protocolo, pero **nunca bloquea outflows** (retiros). Un usuario siempre debe poder recuperar sus fondos independientemente del estado del vault.
+**DeFi Principle**: Pause blocks inflows (deposits) and protocol operations, but **never blocks outflows** (withdrawals). A user must always be able to recover their funds regardless of the vault state.
 
-**Nota:** Owner del manager debería remover estrategias comprometidas durante pausa.
+**Note:** Manager Owner should remove compromised strategies during pause.
 
 ---
 
-### 4.4 Uso de SafeERC20
+### 4.4 SafeERC20 Usage
 
-**Todas las operaciones con IERC20 usan SafeERC20:**
+**All IERC20 operations use SafeERC20:**
 ```solidity
 using SafeERC20 for IERC20;
 
-// En lugar de:
-IERC20(asset).transfer(receiver, amount);           // No recomendado
-IERC20(asset).transferFrom(user, vault, amount);    // No recomendado
+// Instead of:
+IERC20(asset).transfer(receiver, amount);           // Not recommended
+IERC20(asset).transferFrom(user, vault, amount);    // Not recommended
 
-// Usamos:
-IERC20(asset).safeTransfer(receiver, amount);       // Correcto
-IERC20(asset).safeTransferFrom(user, vault, amount);// Correcto
+// We use:
+IERC20(asset).safeTransfer(receiver, amount);       // Correct
+IERC20(asset).safeTransferFrom(user, vault, amount);// Correct
 ```
 
-**Protecciones de SafeERC20:**
-- Maneja tokens que no retornan bool en transfer (legacy tokens)
-- Revierte si transfer falla silenciosamente
-- Verifica return value correctamente
+**SafeERC20 protections:**
+- Handles tokens that do not return bool on transfer (legacy tokens)
+- Reverts if transfer fails silently
+- Correctly verifies return value
 
 ---
 
 ### 4.5 Harvest Fail-Safe
 
 ```solidity
-// StrategyManager.harvest() usa try-catch
+// StrategyManager.harvest() uses try-catch
 for (uint256 i = 0; i < strategies.length; i++) {
     try strategies[i].harvest() returns (uint256 profit) {
         total_profit += profit;
     } catch Error(string memory reason) {
         emit HarvestFailed(address(strategies[i]), reason);
-        // Continúa con la siguiente estrategia
+        // Continues with the next strategy
     }
 }
 ```
 
-**Propósito:**
-- Si LidoStrategy.harvest() retorna 0 (yield via exchange rate, no rewards directos), el resto continúa
-- Si CurveStrategy.harvest() falla (swap CRV→stETH con slippage alto), AaveStrategy continúa
-- Si UniswapV3Strategy.harvest() falla (out-of-range, sin fees), las demás estrategias continúan
-- Previene que un fallo bloquee todo el harvest
-- Emite evento para monitoring
+**Purpose:**
+- If LidoStrategy.harvest() returns 0 (yield via exchange rate, no direct rewards), the rest continues
+- If CurveStrategy.harvest() fails (CRV→stETH swap with high slippage), AaveStrategy continues
+- If UniswapV3Strategy.harvest() fails (out-of-range, no fees), the other strategies continue
+- Prevents a single failure from blocking the entire harvest
+- Emits event for monitoring
 
 ---
 
 ### 4.6 Router Stateless Design
 
-**Todas las funciones del Router verifican balance 0 al final:**
+**All Router functions verify 0 balance at the end:**
 
 ```solidity
-// En zapDepositETH, zapDepositERC20:
+// In zapDepositETH, zapDepositERC20:
 if (IERC20(weth).balanceOf(address(this)) != 0) revert Router__FundsStuck();
 
-// En zapWithdrawERC20:
+// In zapWithdrawERC20:
 if (IERC20(token_out).balanceOf(address(this)) != 0) revert Router__FundsStuck();
 ```
 
-**Propósito:**
-- Garantiza que el Router NUNCA retiene fondos entre transacciones
-- Si hay fondos atrapados (bug), la transacción revierte completamente
-- Sin fondos custodiados = sin superficie de ataque para robo
+**Purpose:**
+- Guarantees that the Router NEVER retains funds between transactions
+- If there are stuck funds (bug), the transaction reverts completely
+- No custodied funds = no attack surface for theft
 
-**Nota**: `zapWithdrawETH` no verifica WETH balance porque el WETH se unwrappea a ETH inmediatamente. Solo verifica que el ETH se transfirió al usuario correctamente.
+**Note**: `zapWithdrawETH` does not verify WETH balance because the WETH is unwrapped to ETH immediately. It only verifies that the ETH was correctly transferred to the user.
 
 ---
 
-### 4.7 Slippage Protection en Swaps
+### 4.7 Slippage Protection on Swaps
 
 ```solidity
-// En strategies de V2 (AaveStrategy, CurveStrategy)
+// In V1 strategies (AaveStrategy, CurveStrategy)
 uint256 public constant MAX_SLIPPAGE_BPS = 100;  // 1%
 
 uint256 min_amount_out = (claimed * (BASIS_POINTS - MAX_SLIPPAGE_BPS)) / BASIS_POINTS;
-// = claimed * 9900 / 10000 (mínimo 99% del valor esperado)
+// = claimed * 9900 / 10000 (minimum 99% of expected value)
 
 uniswap_router.exactInputSingle(
     // ...
-    amountOutMinimum: min_amount_out,  // Revierte si output < 99%
+    amountOutMinimum: min_amount_out,  // Reverts if output < 99%
     // ...
 );
 ```
 
-**Propósito:**
-- Previene sandwich attacks (máximo 1% de impacto en strategies)
-- Protege contra pools con baja liquidez
-- Si el swap no puede conseguir 99%+, revierte (y fail-safe continúa)
+**Purpose:**
+- Prevents sandwich attacks (maximum 1% impact in strategies)
+- Protects against pools with low liquidity
+- If the swap cannot achieve 99%+, it reverts (and fail-safe continues)
 
-**Nota sobre UniswapV3Strategy:**
-- UniswapV3Strategy NO aplica slippage protection explícita en los swaps WETH↔USDC internos
-- Este trade-off está documentado en la sección "Riesgos por Estrategia"
-- El pool WETH/USDC 0.05% tiene suficiente liquidez para hacer el riesgo marginal
+**Note on UniswapV3Strategy:**
+- UniswapV3Strategy does NOT apply explicit slippage protection on internal WETH↔USDC swaps
+- This trade-off is documented in the "Risks per Strategy" section
+- The WETH/USDC 0.05% pool has sufficient liquidity to make the risk marginal
 
-**En Router (configurable por usuario):**
+**In Router (user-configurable):**
 
 ```solidity
-// zapDepositERC20: usuario especifica min_weth_out
+// zapDepositERC20: user specifies min_weth_out
 uint256 weth_out = _swapToWETH(token_in, amount_in, pool_fee, min_weth_out);
 if (weth_out < min_weth_out) revert Router__SlippageExceeded();
 
-// zapWithdrawERC20: usuario especifica min_token_out
+// zapWithdrawERC20: user specifies min_token_out
 uint256 amount_out = _swapFromWETH(weth_in, token_out, pool_fee, min_token_out);
 if (amount_out < min_token_out) revert Router__SlippageExceeded();
 ```
 
-**Responsabilidad del frontend:**
-- Calcular quote esperado de Uniswap Quoter
-- Aplicar tolerancia (típicamente 0.5-1%)
-- Pasar como `min_weth_out` / `min_token_out`
+**Frontend responsibility:**
+- Calculate expected quote from Uniswap Quoter
+- Apply tolerance (typically 0.5-1%)
+- Pass as `min_weth_out` / `min_token_out`
 
 ---
 
 ### 4.8 Emergency Exit Mechanism
 
-El protocolo implementa un mecanismo de emergency exit que permite drenar todas las estrategias activas y devolver los fondos al vault en caso de bug crítico, exploit activo, o comportamiento anómalo en protocolos subyacentes.
+The protocol implements an emergency exit mechanism that allows draining all active strategies and returning funds to the vault in case of a critical bug, active exploit, or anomalous behavior in underlying protocols.
 
-**Secuencia de emergencia (3 transacciones independientes):**
+**Emergency sequence (3 independent transactions):**
 
 ```solidity
-// PASO 1: Pausar el vault (bloquea nuevos depósitos, harvest, allocateIdle)
-// Los retiros (withdraw/redeem) permanecen habilitados
+// STEP 1: Pause the vault (blocks new deposits, harvest, allocateIdle)
+// Withdrawals (withdraw/redeem) remain enabled
 vault.pause();
 
-// PASO 2: Drenar todas las estrategias al vault
-// Try-catch por estrategia: si una falla, continúa con las demás
+// STEP 2: Drain all strategies to the vault
+// Try-catch per strategy: if one fails, continues with the others
 manager.emergencyExit();
 
-// PASO 3: Reconciliar idle_buffer con el balance real de WETH
-// Necesario porque emergencyExit transfiere WETH al vault sin pasar por deposit()
+// STEP 3: Reconcile idle_buffer with the actual WETH balance
+// Necessary because emergencyExit transfers WETH to vault without going through deposit()
 vault.syncIdleBuffer();
 ```
 
-**Características de seguridad:**
+**Security features:**
 
-1. **Sin timelock**: En emergencias cada bloque expone fondos al exploit. La velocidad de respuesta prima sobre governance
-2. **Fail-safe (try-catch)**: Si una estrategia falla durante el drenaje (bug, frozen, etc.), las demás continúan. La estrategia problemática emite `HarvestFailed` y el owner la gestiona por separado
-3. **Retiros siempre habilitados**: Tras pausar, los usuarios pueden seguir retirando sus fondos. Nunca se bloquean los outflows
-4. **Accounting correcto**: `syncIdleBuffer()` reconcilia `idle_buffer` con el balance real de WETH del contrato, asegurando que `totalAssets()` y el exchange rate shares/assets sean correctos tras el drenaje
-5. **Eventos para indexers**: `EmergencyExit(timestamp, total_rescued, strategies_drained)` y `IdleBufferSynced(old_buffer, new_buffer)` permiten monitoreo on-chain
+1. **No timelock**: In emergencies every block exposes funds to the exploit. Speed of response takes priority over governance
+2. **Fail-safe (try-catch)**: If a strategy fails during the drain (bug, frozen, etc.), the others continue. The problematic strategy emits `HarvestFailed` and the owner handles it separately
+3. **Withdrawals always enabled**: After pausing, users can continue withdrawing their funds. Outflows are never blocked
+4. **Correct accounting**: `syncIdleBuffer()` reconciles `idle_buffer` with the actual WETH balance of the contract, ensuring that `totalAssets()` and the shares/assets exchange rate are correct after the drain
+5. **Events for indexers**: `EmergencyExit(timestamp, total_rescued, strategies_drained)` and `IdleBufferSynced(old_buffer, new_buffer)` allow on-chain monitoring
 
-**¿Qué pasa si `emergencyExit()` revierte completamente?**
-- El vault queda pausado (paso 1 ya ejecutado)
-- Los fondos permanecen en las estrategias — ningún asset se pierde
-- Los usuarios pueden seguir retirando (withdraw/redeem no están pausados)
-- El owner diagnostica y reintenta
+**What happens if `emergencyExit()` reverts completely?**
+- The vault remains paused (step 1 already executed)
+- Funds remain in the strategies — no asset is lost
+- Users can continue withdrawing (withdraw/redeem are not paused)
+- The owner diagnoses and retries
 
-**¿Qué pasa si Vault y Manager tienen owners distintos?**
-- Cada owner ejecuta su paso: owner del vault ejecuta `pause()` y `syncIdleBuffer()`, owner del manager ejecuta `emergencyExit()`
-- La comunicación off-chain entre owners es crítica en este escenario
+**What happens if Vault and Manager have different owners?**
+- Each owner executes their step: vault owner executes `pause()` and `syncIdleBuffer()`, manager owner executes `emergencyExit()`
+- Off-chain communication between owners is critical in this scenario
 
-**Nota sobre dust/rounding:** Tras `emergencyExit()`, las estrategias pueden retener 1-2 wei de dust debido al rounding de conversiones (ej: wstETH/stETH). Esto es comportamiento esperado y no representa riesgo.
+**Note on dust/rounding:** After `emergencyExit()`, strategies may retain 1-2 wei of dust due to rounding of conversions (e.g.: wstETH/stETH). This is expected behavior and does not represent a risk.
 
-**Funciones involucradas:**
-- `StrategyManager.emergencyExit()` — `onlyOwner`, drena estrategias
-- `Vault.syncIdleBuffer()` — `onlyOwner`, reconcilia accounting
+**Functions involved:**
+- `StrategyManager.emergencyExit()` — `onlyOwner`, drains strategies
+- `Vault.syncIdleBuffer()` — `onlyOwner`, reconciles accounting
 - `Vault.pause()` / `Vault.unpause()` — `onlyOwner`, emergency stop
 
 ---
 
-## 5. Puntos de Centralización
+## 5. Centralization Points
 
-El protocolo tiene puntos de centralización controlados por owners. En producción, estos deberían ser multisigs.
+The protocol has centralization points controlled by owners. In production, these should be multisigs.
 
-### 5.1 Owner del Vault
+### 5.1 Vault Owner
 
-**Puede:**
+**Can:**
 
-1. **Pausar deposits/harvest/allocateIdle**
+1. **Pause deposits/harvest/allocateIdle**
 ```solidity
 vault.pause();
-// Bloquea: deposit, mint, harvest, allocateIdle
-// NO bloquea: withdraw, redeem (usuarios siempre pueden retirar)
+// Blocks: deposit, mint, harvest, allocateIdle
+// Does NOT block: withdraw, redeem (users can always withdraw)
 ```
 
-2. **Cambiar parámetros del protocolo**
+2. **Change protocol parameters**
 ```solidity
-vault.setPerformanceFee(5000);             // Aumenta fee a 50%
-vault.setFeeSplit(5000, 5000);             // Cambia split 50/50
-vault.setMinDeposit(1 ether);             // Sube depósito mínimo
-vault.setIdleThreshold(100 ether);        // Cambia cuando invertir
-vault.setMaxTVL(10000 ether);             // Aumenta circuit breaker
-vault.setKeeperIncentive(500);            // Sube incentivo a 5%
-vault.setMinProfitForHarvest(1 ether);    // Sube threshold harvest
+vault.setPerformanceFee(5000);             // Increases fee to 50%
+vault.setFeeSplit(5000, 5000);             // Changes split 50/50
+vault.setMinDeposit(1 ether);             // Raises minimum deposit
+vault.setIdleThreshold(100 ether);        // Changes when to invest
+vault.setMaxTVL(10000 ether);             // Increases circuit breaker
+vault.setKeeperIncentive(500);            // Raises incentive to 5%
+vault.setMinProfitForHarvest(1 ether);    // Raises harvest threshold
 ```
 
-3. **Cambiar direcciones críticas**
+3. **Change critical addresses**
 ```solidity
-vault.setTreasury(new_treasury);           // Cambia quién recibe fees
-vault.setFounder(new_founder);             // Cambia founder address
-vault.setStrategyManager(new_manager);     // Cambia strategy manager
-vault.setOfficialKeeper(keeper, true);     // Marca keepers oficiales
+vault.setTreasury(new_treasury);           // Changes who receives fees
+vault.setFounder(new_founder);             // Changes founder address
+vault.setStrategyManager(new_manager);     // Changes strategy manager
+vault.setOfficialKeeper(keeper, true);     // Marks official keepers
 ```
 
-4. **Reconciliar accounting tras emergency exit**
+4. **Reconcile accounting after emergency exit**
 ```solidity
-vault.syncIdleBuffer();                    // Reconcilia idle_buffer con balance real de WETH
+vault.syncIdleBuffer();                    // Reconciles idle_buffer with actual WETH balance
 ```
 
-**NO puede:**
-- Robar fondos directamente
-- Transferir WETH del vault sin pasar por withdraw
-- Mintear shares sin depositar assets
-- Modificar balances de usuarios
+**Cannot:**
+- Steal funds directly
+- Transfer WETH from the vault without going through withdraw
+- Mint shares without depositing assets
+- Modify user balances
 
-**Mitigaciones recomendadas:**
-- Usar multisig (Gnosis Safe) como owner
-- Timelock para cambios de parámetros sensibles
-- Eventos emitidos para transparencia
+**Recommended mitigations:**
+- Use multisig (Gnosis Safe) as owner
+- Timelock for sensitive parameter changes
+- Events emitted for transparency
 
 ---
 
-### 5.2 Router (Sin Privilegios)
+### 5.2 Router (No Privileges)
 
-**El Router NO tiene puntos de centralización:**
+**The Router has NO centralization points:**
 
-- **Sin owner**: El Router no tiene funciones `onlyOwner`
-- **Sin privilegios en el Vault**: Es un usuario normal (llama funciones públicas: deposit/redeem)
-- **Inmutable**: Todas las direcciones (weth, vault, swap_router) son `immutable`
-- **Sin upgrades**: El Router no es upgradeable
-- **Stateless**: No custodia fondos → sin riesgo de robo incluso si hay bug
+- **No owner**: The Router has no `onlyOwner` functions
+- **No privileges in the Vault**: It is a normal user (calls public functions: deposit/redeem)
+- **Immutable**: All addresses (weth, vault, swap_router) are `immutable`
+- **No upgrades**: The Router is not upgradeable
+- **Stateless**: Does not custody funds → no theft risk even if there is a bug
 
-**Si el Router tiene un bug:**
-- Worst case: Un usuario pierde fondos en UNA transacción (la que ejecuta)
-- El Vault y los fondos de otros usuarios NO se ven afectados
-- Se puede desplegar un nuevo Router sin afectar al Vault
+**If the Router has a bug:**
+- Worst case: A user loses funds in ONE transaction (the one being executed)
+- The Vault and other users' funds are NOT affected
+- A new Router can be deployed without affecting the Vault
 
-**Esto es intencional**: El Router es desechable y reemplazable. El Vault es el core crítico.
+**This is intentional**: The Router is disposable and replaceable. The Vault is the critical core.
 
 ---
 
-### 5.3 Owner del Manager
+### 5.3 Manager Owner
 
-**Puede:**
+**Can:**
 
-1. **Agregar estrategias maliciosas**
+1. **Add malicious strategies**
 ```solidity
-// RIESGO: Owner puede agregar estrategia fake
+// RISK: Owner can add fake strategy
 manager.addStrategy(address(malicious_strategy));
 
-// malicious_strategy.deposit() podría:
-// - No depositar en protocolo real
-// - Transferir WETH a address del atacante
-// - Reportar totalAssets() falso
-// - harvest() podría robar fondos
+// malicious_strategy.deposit() could:
+// - Not deposit into the real protocol
+// - Transfer WETH to attacker's address
+// - Report false totalAssets()
+// - harvest() could steal funds
 ```
 
-2. **Remover estrategias**
+2. **Remove strategies**
 ```solidity
-// Solo si balance = 0 (protección contra pérdida accidental)
+// Only if balance = 0 (protection against accidental loss)
 manager.removeStrategy(index);
 ```
 
-3. **Cambiar parámetros de allocation**
+3. **Change allocation parameters**
 ```solidity
-manager.setMaxAllocationPerStrategy(10000); // Permite 100% en una estrategia
-manager.setMinAllocationThreshold(0);       // Permite micro-allocations
-manager.setRebalanceThreshold(0);           // Permite rebalances sin diferencia APY
+manager.setMaxAllocationPerStrategy(10000); // Allows 100% in one strategy
+manager.setMinAllocationThreshold(0);       // Allows micro-allocations
+manager.setRebalanceThreshold(0);           // Allows rebalances without APY difference
 ```
 
-4. **Emergency exit (drenar todas las estrategias)**
+4. **Emergency exit (drain all strategies)**
 ```solidity
-manager.emergencyExit();                    // Drena todas las estrategias al vault
-// Try-catch: si una estrategia falla, continúa con las demás
+manager.emergencyExit();                    // Drains all strategies to vault
+// Try-catch: if a strategy fails, continues with the others
 ```
 
-**NO puede:**
-- Llamar allocate(), withdrawTo() o harvest() (solo vault puede)
-- Robar WETH directamente del manager
-- Depositar/retirar de estrategias directamente
+**Cannot:**
+- Call allocate(), withdrawTo() or harvest() (only vault can)
+- Steal WETH directly from the manager
+- Deposit/withdraw from strategies directly
 
-**Mitigaciones recomendadas:**
-- Multisig como owner
-- Whitelist de estrategias permitidas (off-chain governance)
-- Auditar estrategias antes de agregar
-- Monitoring de parámetros críticos
+**Recommended mitigations:**
+- Multisig as owner
+- Whitelist of allowed strategies (off-chain governance)
+- Audit strategies before adding
+- Monitoring of critical parameters
 
 ---
 
 ### 5.4 Single Point of Failure
 
-**Escenario crítico:**
+**Critical scenario:**
 ```
-Owner EOA pierde private key
-  → No se puede pausar vault
-  → No se puede remover estrategia comprometida
-  → Fondos podrían estar en riesgo
+Owner EOA loses private key
+  → Cannot pause vault
+  → Cannot remove compromised strategy
+  → Funds could be at risk
 ```
 
-**Soluciones recomendadas para producción:**
+**Recommended solutions for production:**
 
-1. **Multisig Gnosis Safe (3/5 o 4/7)**
-   - Requiere múltiples firmas para acciones críticas
-   - Previene pérdida de key única
+1. **Gnosis Safe Multisig (3/5 or 4/7)**
+   - Requires multiple signatures for critical actions
+   - Prevents loss of single key
 
 2. **Timelock**
    ```solidity
-   // Cambios de parámetros tienen delay de 24-48h
-   // Usuarios pueden retirar si no están de acuerdo
+   // Parameter changes have a 24-48h delay
+   // Users can withdraw if they disagree
    ```
 
-3. **Roles granulares (OpenZeppelin AccessControl)**
+3. **Granular roles (OpenZeppelin AccessControl)**
    ```solidity
-   PAUSER_ROLE      → Puede pausar (keeper de confianza)
-   STRATEGY_ROLE    → Puede agregar/remover strategies (DAO)
-   PARAM_ROLE       → Puede ajustar parámetros (multisig)
+   PAUSER_ROLE      → Can pause (trusted keeper)
+   STRATEGY_ROLE    → Can add/remove strategies (DAO)
+   PARAM_ROLE       → Can adjust parameters (multisig)
    ```
 
 ---
 
-## 6. Limitaciones Conocidas
+## 6. Known Limitations
 
-El protocolo tiene limitaciones deliberadas y trade-offs conocidos:
+The protocol has deliberate limitations and known trade-offs:
 
-### 6.1 Solo WETH
+### 6.1 WETH Only
 
-**Limitación:**
-- Solo soporta WETH como asset de entrada/salida del vault
-- Las strategies internamente convierten a stETH/wstETH/USDC según corresponda
+**Limitation:**
+- Only supports WETH as vault input/output asset
+- Strategies internally convert to stETH/wstETH/USDC as appropriate
 
-**Razones:**
-- Simplicidad del vault core
-- Strategies LST tienen mejores rates para ETH/WETH
-- Multi-asset requiere price oracles adicionales (mayor superficie de ataque)
+**Reasons:**
+- Vault core simplicity
+- LST strategies have better rates for ETH/WETH
+- Multi-asset requires additional price oracles (larger attack surface)
 
 ---
 
-### 6.2 Weighted Allocation Básico
+### 6.2 Basic Weighted Allocation
 
-**Limitación:**
-- Algoritmo simple: allocation proporcional a APY
-- No considera volatilidad, liquidez, historial
+**Limitation:**
+- Simple algorithm: allocation proportional to APY
+- Does not consider volatility, liquidity, or history
 
-**Fórmula actual:**
+**Current formula:**
 ```solidity
 target[i] = (strategy_apy[i] * BASIS_POINTS) / total_apy
-// Con caps: max 50%, min 10%
+// With caps: max 50%, min 10%
 ```
 
-**Mejoras potenciales:**
+**Potential improvements:**
 - Sharpe ratio (reward/risk)
-- Liquidez disponible en protocolos
-- Historial de APY (no solo snapshot)
-- Penalización por estrategias out-of-range (UniswapV3Strategy)
+- Available liquidity in protocols
+- APY history (not just snapshot)
+- Penalty for out-of-range strategies (UniswapV3Strategy)
 
 ---
 
-### 6.3 Idle Buffer No Genera Yield
+### 6.3 Idle Buffer Does Not Generate Yield
 
-**Limitación:**
-- WETH en idle buffer no está invertido
-- Durante acumulación (0-8 ETH en Balanced, 0-12 ETH en Aggressive), no hay yield
+**Limitation:**
+- WETH in idle buffer is not invested
+- During accumulation (0-8 ETH in Balanced, 0-12 ETH in Aggressive), there is no yield
 
 **Trade-off:**
 ```
-Gas savings > yield perdido en idle
+Gas savings > yield lost in idle
 
-Ejemplo (Balanced, 5 ETH en idle durante 1 día):
-- APY perdido: 6% anual (CurveStrategy referencia) = 0.0008 ETH/día
-- Gas ahorrado: 0.015 ETH (por no hacer allocate solo)
-- Beneficio neto: 0.015 - 0.0008 = 0.0142 ETH
+Example (Balanced, 5 ETH in idle for 1 day):
+- Lost APY: 6% annual (CurveStrategy reference) = 0.0008 ETH/day
+- Gas saved: 0.015 ETH (for not doing allocate alone)
+- Net benefit: 0.015 - 0.0008 = 0.0142 ETH
 ```
 
-**Alternativa considerada:**
-- Auto-compound idle en Aave (añade complejidad y una external call extra)
+**Alternative considered:**
+- Auto-compound idle in Aave (adds complexity and an extra external call)
 
 ---
 
-### 6.4 Rebalancing Manual
+### 6.4 Manual Rebalancing
 
-**Limitación:**
-- No hay rebalancing automático on-chain
-- Requiere keepers externos o usuarios
+**Limitation:**
+- No automatic on-chain rebalancing
+- Requires external keepers or users
 
-**Razones:**
-- Rebalancing en cada depósito sería carísimo
-- Keepers pueden elegir momento óptimo (gas bajo)
-- shouldRebalance() es view (keepers pueden simular off-chain)
+**Reasons:**
+- Rebalancing on every deposit would be very expensive
+- Keepers can choose the optimal moment (low gas)
+- shouldRebalance() is view (keepers can simulate off-chain)
 
-**Mitigaciones:**
-- Cualquiera puede ejecutar (permissionless)
-- Threshold del 2% (Balanced) / 3% (Aggressive) previene ejecuciones innecesarias
+**Mitigations:**
+- Anyone can execute (permissionless)
+- 2% threshold (Balanced) / 3% (Aggressive) prevents unnecessary executions
 
 ---
 
-### 6.5 Treasury Shares Ilíquidas
+### 6.5 Illiquid Treasury Shares
 
-**Limitación:**
-- Treasury recibe performance fees en shares (vxWETH)
-- Shares no se pueden vender fácilmente sin diluir a holders
+**Limitation:**
+- Treasury receives performance fees in shares (vxWETH)
+- Shares cannot easily be sold without diluting holders
 
-**Consecuencias:**
-- Treasury acumula shares que auto-compound (buen yield a largo plazo)
-- Pero no puede convertir fácilmente a liquid assets sin impactar precio de shares
+**Consequences:**
+- Treasury accumulates shares that auto-compound (good long-term yield)
+- But cannot easily convert to liquid assets without impacting share price
 
 **Trade-off:**
-- Auto-compound > liquidez inmediata para treasury
-- Founder recibe liquid (WETH) para costes operativos
-- Si treasury necesita liquidez, puede redeem shares gradualmente
+- Auto-compound > immediate liquidity for treasury
+- Founder receives liquid (WETH) for operational costs
+- If treasury needs liquidity, it can redeem shares gradually
 
 ---
 
-### 6.6 Harvest Depende de Liquidez Uniswap
+### 6.6 Harvest Depends on Uniswap Liquidity
 
-**Limitación:**
-- Si pools de reward tokens (CRV/WETH, AAVE/WETH) en Uniswap V3 no tienen liquidez, harvest falla
-- Rewards se acumulan sin convertir a WETH
+**Limitation:**
+- If reward token pools (CRV/WETH, AAVE/WETH) on Uniswap V3 do not have liquidity, harvest fails
+- Rewards accumulate without being converted to WETH
 
-**Mitigaciones:**
-- Pools de reward tokens son altamente líquidos en mainnet
-- Fail-safe en StrategyManager permite que estrategias individuales fallen
-- Rewards no se pierden, solo se acumulan para el siguiente harvest exitoso
-- Slippage del 1% protege contra pools temporalmente ilíquidos
+**Mitigations:**
+- Reward token pools are highly liquid on mainnet
+- Fail-safe in StrategyManager allows individual strategies to fail
+- Rewards are not lost, they only accumulate for the next successful harvest
+- 1% slippage protects against temporarily illiquid pools
 
-**Nota sobre LidoStrategy:**
-- LidoStrategy.harvest() retorna 0 — no hay swap de rewards
-- El yield se acumula via el exchange rate creciente de wstETH
-- No depende de liquidez de Uniswap para su harvest
-
----
-
-### 6.7 Router Depende de Liquidez Uniswap V3
-
-**Limitación:**
-- Router solo puede operar con tokens que tengan pool de Uniswap V3 con WETH
-- Si un pool no existe o no tiene liquidez suficiente, zapDeposit/zapWithdraw falla
-
-**Tokens soportados típicamente:**
-- Stablecoins: USDC, USDT, DAI (pools 0.05% muy líquidos)
-- Blue chips: WBTC, LINK, UNI (pools 0.3% líquidos)
-- Otros ERC20 con pool WETH: depende de liquidez
-
-**Mitigaciones:**
-- Slippage protection: si no hay liquidez, swap revierte (usuario no pierde fondos)
-- Pool fee configurable: frontend elige el pool más líquido (100, 500, 3000, 10000 bps)
-- Fallback: usuarios siempre pueden comprar WETH manualmente y usar vault.deposit() directo
+**Note on LidoStrategy:**
+- LidoStrategy.harvest() returns 0 — no reward swap
+- Yield accumulates via the growing wstETH exchange rate
+- Does not depend on Uniswap liquidity for its harvest
 
 ---
 
-### 6.8 Max 10 Estrategias
+### 6.7 Router Depends on Uniswap V3 Liquidity
 
-**Limitación:**
-- Máximo 10 estrategias activas simultáneamente (hard-coded)
+**Limitation:**
+- Router can only operate with tokens that have a Uniswap V3 pool with WETH
+- If a pool does not exist or does not have sufficient liquidity, zapDeposit/zapWithdraw fails
 
-**Razones:**
-- Previene gas DoS en loops (allocate, withdrawTo, harvest, rebalance)
-- Con 10 estrategias, gas cost es predecible y razonable
-- Más de 10 estrategias probablemente no añaden diversificación significativa
+**Typically supported tokens:**
+- Stablecoins: USDC, USDT, DAI (very liquid 0.05% pools)
+- Blue chips: WBTC, LINK, UNI (liquid 0.3% pools)
+- Other ERC20 with WETH pool: depends on liquidity
 
----
-
-### 6.9 UniswapV3Strategy: Posición Out-of-Range
-
-**Limitación:**
-- Si el precio de WETH/USDC sale del rango ±10%, la posición no genera fees
-- No hay rebalancing automático de posición
-
-**Impacto:**
-- La posición sigue contabilizada en totalAssets()
-- El APY efectivo del tier Aggressive cae cuando UniswapV3Strategy está out-of-range
-- Los holders existentes se ven diluidos si nuevos depositantes entran durante este período
-
-**Mitigaciones:**
-- El rango ±960 ticks es suficientemente amplio para absorber volatilidad normal de WETH
-- El tier Aggressive tiene un `rebalance_threshold` del 3%, permitiendo reasignar fondos a CurveStrategy si UniswapV3Strategy pierde competitividad
+**Mitigations:**
+- Slippage protection: if there is no liquidity, swap reverts (user does not lose funds)
+- Configurable pool fee: frontend chooses the most liquid pool (100, 500, 3000, 10000 bps)
+- Fallback: users can always buy WETH manually and use vault.deposit() directly
 
 ---
 
-## 7. Recomendaciones para Auditoría
+### 6.8 Max 10 Strategies
 
-Si este protocolo fuera a mainnet, auditoría debería enfocarse en:
+**Limitation:**
+- Maximum 10 simultaneously active strategies (hard-coded)
 
-### 7.1 Matemáticas Críticas
+**Reasons:**
+- Prevents gas DoS in loops (allocate, withdrawTo, harvest, rebalance)
+- With 10 strategies, gas cost is predictable and reasonable
+- More than 10 strategies probably do not add significant diversification
 
-**Áreas de enfoque:**
+---
 
-1. **Cálculo de performance fee y distribución**
+### 6.9 UniswapV3Strategy: Out-of-Range Position
+
+**Limitation:**
+- If the WETH/USDC price exits the ±10% range, the position does not generate fees
+- No automatic position rebalancing
+
+**Impact:**
+- The position is still counted in totalAssets()
+- The effective APY of the Aggressive tier falls when UniswapV3Strategy is out of range
+- Existing holders are diluted if new depositors enter during this period
+
+**Mitigations:**
+- The ±960 tick range is wide enough to absorb normal WETH volatility
+- The Aggressive tier has a `rebalance_threshold` of 3%, allowing funds to be reallocated to CurveStrategy if UniswapV3Strategy loses competitiveness
+
+---
+
+## 7. Audit Recommendations
+
+If this protocol were to go to mainnet, an audit should focus on:
+
+### 7.1 Critical Mathematics
+
+**Focus areas:**
+
+1. **Performance fee calculation and distribution**
 ```solidity
-// ¿Overflow posible en (profit * keeper_incentive) / BASIS_POINTS?
-// ¿Qué pasa si performance_fee = 10000 (100%)?
-// ¿Qué pasa si treasury_split + founder_split != BASIS_POINTS?
+// Is overflow possible in (profit * keeper_incentive) / BASIS_POINTS?
+// What happens if performance_fee = 10000 (100%)?
+// What happens if treasury_split + founder_split != BASIS_POINTS?
 ```
 
-2. **Weighted allocation en _computeTargets()**
+2. **Weighted allocation in _computeTargets()**
 ```solidity
-// ¿La normalización suma exactamente 10000?
-// ¿Qué pasa si total_apy = 0?
-// ¿Qué pasa si una strategy reporta APY = type(uint256).max?
+// Does normalization sum to exactly 10000?
+// What happens if total_apy = 0?
+// What happens if a strategy reports APY = type(uint256).max?
 ```
 
-3. **Conversión shares ↔ assets (ERC4626)**
+3. **shares ↔ assets conversion (ERC4626)**
 ```solidity
-// ¿previewWithdraw y previewRedeem son consistentes?
-// ¿Puede haber rounding que beneficie al atacante?
-// ¿Mintear shares al treasury durante harvest afecta exchange rate?
+// Are previewWithdraw and previewRedeem consistent?
+// Can there be rounding that benefits the attacker?
+// Does minting shares to treasury during harvest affect the exchange rate?
 ```
 
 ---
 
 ### 7.2 Edge Cases
 
-**Escenarios extremos a testear:**
+**Extreme scenarios to test:**
 
-1. **Primer depósito = min_deposit (0.01 ETH)**
-   - ¿Shares calculados correctamente?
-   - ¿Vulnerable a rounding attacks?
+1. **First deposit = min_deposit (0.01 ETH)**
+   - Are shares calculated correctly?
+   - Vulnerable to rounding attacks?
 
-2. **Una estrategia con APY = 0**
-   - ¿_computeTargets() maneja correctamente?
-   - ¿Recibe allocation o se salta?
+2. **One strategy with APY = 0**
+   - Does _computeTargets() handle correctly?
+   - Does it receive allocation or is it skipped?
 
-3. **Todas las estrategias con APY = 0**
-   - ¿Distribución equitativa funciona?
+3. **All strategies with APY = 0**
+   - Does equal distribution work?
 
-4. **Strategy.withdraw() revierte (falta liquidez)**
-   - ¿El usuario puede retirar o todo el withdraw falla?
+4. **Strategy.withdraw() reverts (insufficient liquidity)**
+   - Can the user withdraw or does the entire withdrawal fail?
 
-5. **Harvest cuando idle_buffer = 0 y keeper necesita pago**
-   - ¿Retira correctamente de estrategias para pagar keeper?
+5. **Harvest when idle_buffer = 0 and keeper needs payment**
+   - Does it correctly withdraw from strategies to pay the keeper?
 
-6. **Harvest retorna profit < min_profit_for_harvest**
-   - ¿Se acumulan los rewards sin distribuir fees?
+6. **Harvest returns profit < min_profit_for_harvest**
+   - Do rewards accumulate without distributing fees?
 
-7. **Strategy.harvest() revierte**
-   - ¿Fail-safe continúa con otras estrategias?
+7. **Strategy.harvest() reverts**
+   - Does fail-safe continue with other strategies?
 
-8. **UniswapV3Strategy out-of-range durante harvest**
-   - ¿collect() devuelve 0 fees correctamente sin revertir?
-   - ¿totalAssets() refleja el valor correcto de la posición?
+8. **UniswapV3Strategy out-of-range during harvest**
+   - Does collect() return 0 fees correctly without reverting?
+   - Does totalAssets() reflect the correct value of the position?
 
-9. **LidoStrategy harvest retorna 0**
-   - ¿El protocolo no intenta distribuir 0 profit como performance fee?
+9. **LidoStrategy harvest returns 0**
+   - Does the protocol not attempt to distribute 0 profit as performance fee?
 
 ---
 
-### 7.3 Integración con Protocolos Externos
+### 7.3 Integration with External Protocols
 
-**Verificar:**
+**Verify:**
 
 1. **Lido stETH/wstETH**
-   - ¿Qué pasa si submit() de Lido revierte (por limite de stake)?
-   - ¿El exchange rate de wstETH→stETH aumenta siempre monotónicamente?
-   - ¿wrap/unwrap de wstETH pueden revertir?
+   - What happens if Lido's submit() reverts (due to stake limit)?
+   - Does the wstETH→stETH exchange rate always increase monotonically?
+   - Can wrap/unwrap of wstETH revert?
 
-2. **Aave v3 devuelve valores esperados**
-   - ¿Qué pasa si `getReserveData()` revierte?
-   - ¿`claimAllRewards()` puede devolver 0 sin revertir?
-   - ¿Qué pasa si Aave congela el mercado wstETH?
+2. **Aave v3 returns expected values**
+   - What happens if `getReserveData()` reverts?
+   - Can `claimAllRewards()` return 0 without reverting?
+   - What happens if Aave freezes the wstETH market?
 
-3. **Curve pool y gauge**
-   - ¿add_liquidity y remove_liquidity_one_coin pueden revertir por slippage?
-   - ¿gauge.deposit/withdraw tienen restricciones inesperadas?
-   - ¿CRV rewards se acumulan correctamente si no se hace claim por tiempo?
+3. **Curve pool and gauge**
+   - Can add_liquidity and remove_liquidity_one_coin revert due to slippage?
+   - Do gauge.deposit/withdraw have unexpected restrictions?
+   - Do CRV rewards accumulate correctly if no claim is made for a period?
 
-4. **Uniswap V3 swap y posición LP**
-   - ¿Qué pasa si pool no existe?
-   - ¿Qué pasa si deadline expira?
-   - ¿Slippage protection funciona con cantidades muy pequeñas?
-   - ¿mint(), increaseLiquidity(), decreaseLiquidity() y collect() son seguros en secuencia?
-   - ¿Qué pasa si tokenId = 0 (posición no inicializada)?
+4. **Uniswap V3 swap and LP position**
+   - What happens if pool does not exist?
+   - What happens if deadline expires?
+   - Does slippage protection work with very small amounts?
+   - Are mint(), increaseLiquidity(), decreaseLiquidity() and collect() safe in sequence?
+   - What happens if tokenId = 0 (uninitialized position)?
 
 ---
 
 ### 7.4 Reentrancy
 
-**Puntos de atención:**
+**Points of attention:**
 
-1. **¿Todas las external calls siguen CEI?**
-   - Especialmente en `_withdraw()`, `harvest()`, `_distributePerformanceFee()`
+1. **Do all external calls follow CEI?**
+   - Especially in `_withdraw()`, `harvest()`, `_distributePerformanceFee()`
 
-2. **¿SafeERC20 protege contra reentrancy via ERC777?**
-   - WETH no es ERC777, pero buena práctica
+2. **Does SafeERC20 protect against reentrancy via ERC777?**
+   - WETH is not ERC777, but good practice
 
-3. **¿harvest() puede ser llamado recursivamente?**
-   - A través de strategy.harvest() → callback → vault.harvest()
+3. **Can harvest() be called recursively?**
+   - Through strategy.harvest() → callback → vault.harvest()
 
-4. **¿Curve add_liquidity o gauge.deposit pueden hacer callbacks?**
-   - Verificar que no hay hooks externos en el path de ejecución
+4. **Can Curve add_liquidity or gauge.deposit make callbacks?**
+   - Verify that there are no external hooks in the execution path
 
 ---
 
 ### 7.5 Access Control
 
-**Verificar:**
+**Verify:**
 
-1. **¿Todos los setters son onlyOwner?**
-2. **¿allocate/withdrawTo/harvest son realmente onlyVault?**
-3. **¿deposit/withdraw/harvest de strategies son onlyManager?**
-4. **¿rebalance puede ser llamado por cualquiera? (debe ser público)**
-5. **¿initialize() solo se puede llamar una vez?**
-6. **¿El tokenId del NFT de UniswapV3Strategy solo puede ser transferido por el contrato?**
+1. **Are all setters onlyOwner?**
+2. **Are allocate/withdrawTo/harvest truly onlyVault?**
+3. **Are deposit/withdraw/harvest of strategies onlyManager?**
+4. **Can rebalance be called by anyone? (must be public)**
+5. **Can initialize() only be called once?**
+6. **Can the UniswapV3Strategy NFT tokenId only be transferred by the contract?**
 
 ---
 
-## 8. Conclusión de Seguridad
+## 8. Security Conclusion
 
-### Fortalezas del Protocolo
+### Protocol Strengths
 
-**Arquitectura modular y clara**
-- Separación de concerns (Vault, Manager, Strategies)
-- Dos tiers con parámetros de riesgo diferenciados (Balanced / Aggressive)
-- Fácil de auditar y razonar
+**Modular and clear architecture**
+- Separation of concerns (Vault, Manager, Strategies)
+- Two tiers with differentiated risk parameters (Balanced / Aggressive)
+- Easy to audit and reason about
 
-**Uso de estándares de industria**
+**Use of industry standards**
 - ERC4626 (OpenZeppelin)
-- SafeERC20 para todas las transferencias
-- Pausable para emergency stop
+- SafeERC20 for all transfers
+- Pausable for emergency stop
 
-**Protecciones económicas**
-- Min deposit previene rounding attacks
-- Min profit por tier previene harvest spam (0.08 ETH Balanced / 0.12 ETH Aggressive)
-- Slippage protection en swaps de harvest (1%)
+**Economic protections**
+- Min deposit prevents rounding attacks
+- Min profit per tier prevents harvest spam (0.08 ETH Balanced / 0.12 ETH Aggressive)
+- Slippage protection on harvest swaps (1%)
 
-**Circuit breakers múltiples**
-- Max TVL (1000 ETH), min deposit, idle threshold por tier, max strategies
-- Pausa de emergencia (bloquea inflows, nunca outflows)
-- Emergency exit: drenaje completo de estrategias con fail-safe y reconciliación de accounting
+**Multiple circuit breakers**
+- Max TVL (1000 ETH), min deposit, idle threshold per tier, max strategies
+- Emergency pause (blocks inflows, never outflows)
+- Emergency exit: complete strategy drain with fail-safe and accounting reconciliation
 
 **Harvest fail-safe**
-- Try-catch individual por estrategia
-- Si una falla (incluyendo LidoStrategy que retorna 0), las demás continúan
+- Individual try-catch per strategy
+- If one fails (including LidoStrategy which returns 0), the others continue
 
-**Sin permiso para operaciones críticas**
-- Rebalance es público (cualquiera puede ejecutar si es rentable)
-- Harvest es público (incentivizado para keepers externos)
-- AllocateIdle es público (si idle >= threshold del tier)
+**No permission required for critical operations**
+- Rebalance is public (anyone can execute if profitable)
+- Harvest is public (incentivized for external keepers)
+- AllocateIdle is public (if idle >= tier threshold)
 
-### Debilidades Conocidas
+### Known Weaknesses
 
-**Centralización del ownership**
-- Single point of failure si owner pierde key
-- Mitigación: Usar multisig en producción
+**Ownership centralization**
+- Single point of failure if owner loses key
+- Mitigation: Use multisig in production
 
-**Trust en estrategias agregadas**
-- Owner puede agregar estrategia maliciosa
-- Mitigación: Whitelist + auditorías
+**Trust in added strategies**
+- Owner can add malicious strategy
+- Mitigation: Whitelist + audits
 
-**Dependencia de protocolos externos**
-- Si Lido/Aave/Curve/Uniswap tienen exploit, fondos en riesgo
-- Mitigación: Allocation caps (max 50%), fail-safe harvest, tiers separados
+**Dependency on external protocols**
+- If Lido/Aave/Curve/Uniswap have an exploit, funds are at risk
+- Mitigation: Allocation caps (max 50%), fail-safe harvest, separate tiers
 
-**Treasury shares ilíquidas**
-- Treasury acumula shares que no puede vender fácilmente
-- Mitigación: Diseño deliberado (auto-compound > liquidez)
+**Illiquid treasury shares**
+- Treasury accumulates shares that cannot easily be sold
+- Mitigation: Deliberate design (auto-compound > liquidity)
 
-**Harvest depende de Uniswap (para CRV/AAVE rewards)**
-- Si pools de reward tokens no tienen liquidez, harvest parcial falla
-- Mitigación: Fail-safe, rewards se acumulan para siguiente intento
+**Harvest depends on Uniswap (for CRV/AAVE rewards)**
+- If reward token pools lack liquidity, partial harvest fails
+- Mitigation: Fail-safe, rewards accumulate for next attempt
 
-**UniswapV3Strategy sin rebalancing**
-- Posición puede quedarse out-of-range indefinidamente
-- Mitigación: Threshold de rebalance del tier Aggressive permite redistribuir a CurveStrategy
+**UniswapV3Strategy without rebalancing**
+- Position can remain out-of-range indefinitely
+- Mitigation: Aggressive tier rebalance threshold allows redistribution to CurveStrategy
 
-### Recomendaciones Finales
+### Final Recommendations
 
-**Para lanzar a mainnet:**
+**To launch on mainnet:**
 
-1. **Auditoría profesional** (Trail of Bits, OpenZeppelin, Consensys)
-2. **Testnet prolongado** (Sepolia → Mainnet)
+1. **Professional audit** (Trail of Bits, OpenZeppelin, Consensys)
+2. **Extended testnet** (Sepolia → Mainnet)
 3. **Bug bounty** (Immunefi, Code4rena)
-4. **Multisig como owner** (mínimo 3/5)
-5. **Monitoring on-chain** (Forta, Tenderly)
-6. **Emergency playbook** documentado (ver sección 4.8 para la secuencia de emergency exit)
-7. **TVL gradual** (empezar con max_tvl = 100 ETH, subir gradualmente)
+4. **Multisig as owner** (minimum 3/5)
+5. **On-chain monitoring** (Forta, Tenderly)
+6. **Emergency playbook** documented (see section 4.8 for the emergency exit sequence)
+7. **Gradual TVL** (start with max_tvl = 100 ETH, raise gradually)
 
-**Para uso educacional:**
-- Código es production-grade y seguro
-- Arquitectura es sólida y extensible
-- Buenas prácticas implementadas (CEI, SafeERC20, fail-safe, slippage protection)
-- NO usar en mainnet sin auditoría formal
+**For educational use:**
+- Code is production-grade and secure
+- Architecture is solid and extensible
+- Good practices implemented (CEI, SafeERC20, fail-safe, slippage protection)
+- Do NOT use on mainnet without a formal audit
 
 ---
 
-**Fin de la documentación de seguridad.**
+**End of security documentation.**
 
-Para más información, consulta:
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Decisiones de diseño
-- [CONTRACTS.md](CONTRACTS.md) - Documentación de contratos
-- [FLOWS.md](FLOWS.md) - Flujos de usuario
+For more information, see:
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Design decisions
+- [CONTRACTS.md](CONTRACTS.md) - Contract documentation
+- [FLOWS.md](FLOWS.md) - User flows

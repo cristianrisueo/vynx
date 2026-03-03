@@ -13,37 +13,37 @@ import {IWETH} from "@aave/contracts/misc/interfaces/IWETH.sol";
 /**
  * @title LidoStrategyTest
  * @author cristianrisueo
- * @notice Tests unitarios para LidoStrategy con fork de Mainnet
- * @dev Fork test real contra Lido wstETH - valida deposits, withdrawals y APY
+ * @notice Unit tests for LidoStrategy with Mainnet fork
+ * @dev Real fork test against Lido wstETH - validates deposits, withdrawals and APY
  */
 contract LidoStrategyTest is Test {
     //* Variables de estado
 
-    /// @notice Instancia de la estrategia y manager
+    /// @notice Strategy and manager instances
     LidoStrategy public strategy;
     StrategyManager public manager;
 
-    /// @notice Direcciones de los contratos en Mainnet
+    /// @notice Mainnet contract addresses
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant WSTETH = 0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0;
     address constant UNISWAP_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
     address constant POSITION_MANAGER = 0xC36442b4a4522E871399CD717aBDD847Ab11FE88;
-    uint24 constant POOL_FEE = 500; // pool wstETH/WETH usa 0.05%
+    uint24 constant POOL_FEE = 500; // wstETH/WETH pool uses 0.05%
 
-    /// @notice Usuario de prueba
+    /// @notice Test user
     address public alice = makeAddr("alice");
 
-    //* Setup del entorno de testing
+    //* Testing environment setup
 
     /**
-     * @notice Configura el entorno de testing
-     * @dev Fork de Mainnet para interactuar con Lido wstETH real
+     * @notice Configures the testing environment
+     * @dev Mainnet fork to interact with real Lido wstETH
      */
     function setUp() public {
-        // Crea un fork de Mainnet usando el endpoint de Alchemy
+        // Creates a Mainnet fork using the Alchemy endpoint
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Inicializa manager con parámetros del tier Balanced
+        // Initializes manager with Balanced tier parameters
         manager = new StrategyManager(
             WETH,
             IStrategyManager.TierConfig({
@@ -54,16 +54,16 @@ contract LidoStrategyTest is Test {
             })
         );
 
-        // Inicializa la estrategia con wstETH y Uniswap V3 para el retiro
+        // Initializes the strategy with wstETH and Uniswap V3 for withdrawal
         strategy = new LidoStrategy(address(manager), WSTETH, WETH, UNISWAP_ROUTER, POOL_FEE);
 
-        // Semilla de liquidez en el pool wstETH/WETH de Uniswap V3
+        // Seed liquidity in the Uniswap V3 wstETH/WETH pool
         _seedWstEthPool();
     }
 
     /**
-     * @notice Añade liquidez al pool wstETH/WETH de Uniswap V3
-     * @dev El pool forkeado puede tener liquidez insuficiente, esto garantiza swaps exitosos
+     * @notice Adds liquidity to the Uniswap V3 wstETH/WETH pool
+     * @dev The forked pool may have insufficient liquidity, this guarantees successful swaps
      */
     function _seedWstEthPool() internal {
         uint256 ethAmount = 100_000 ether;
@@ -74,14 +74,14 @@ contract LidoStrategyTest is Test {
         IERC20(WETH).approve(address(0), 0); // reset
         uint256 halfWeth = ethAmount / 2;
 
-        // Obtener wstETH: unwrap half WETH → ETH → stake en Lido
+        // Get wstETH: unwrap half WETH → ETH → stake in Lido
         IWETH(WETH).withdraw(halfWeth);
         (bool ok,) = WSTETH.call{value: halfWeth}("");
         require(ok, "wstETH stake failed");
 
         uint256 wstBal = IERC20(WSTETH).balanceOf(address(this));
 
-        // Aprobar position manager
+        // Approve position manager
         IERC20(WSTETH).approve(POSITION_MANAGER, wstBal);
         IERC20(WETH).approve(POSITION_MANAGER, halfWeth);
 
@@ -105,46 +105,46 @@ contract LidoStrategyTest is Test {
 
     receive() external payable {}
 
-    //* Funciones internas helpers
+    //* Internal helper functions
 
     /**
-     * @notice Helper para depositar en la estrategia como manager
-     * @param amount Cantidad a depositar
+     * @notice Helper to deposit into the strategy as manager
+     * @param amount Amount to deposit
      */
     function _deposit(uint256 amount) internal {
-        // Da WETH a la estrategia y deposita como manager
+        // Gives WETH to the strategy and deposits as manager
         deal(WETH, address(strategy), amount);
         vm.prank(address(manager));
         strategy.deposit(amount);
     }
 
     /**
-     * @notice Helper para retirar de la estrategia como manager
-     * @param amount Cantidad a retirar
+     * @notice Helper to withdraw from the strategy as manager
+     * @param amount Amount to withdraw
      */
     function _withdraw(uint256 amount) internal {
         vm.prank(address(manager));
         strategy.withdraw(amount);
     }
 
-    //* Testing de deposit
+    //* Deposit tests
 
     /**
-     * @notice Test de depósito básico en Lido
-     * @dev Comprueba que el depósito convierta WETH a wstETH y totalAssets lo refleje
+     * @notice Basic Lido deposit test
+     * @dev Checks that deposit converts WETH to wstETH and totalAssets reflects it
      */
     function test_Deposit_Basic() public {
-        // Deposita en Lido (WETH → ETH → wstETH)
+        // Deposits in Lido (WETH → ETH → wstETH)
         _deposit(10 ether);
 
-        // Comprueba que totalAssets refleje el depósito (aproximadamente, por exchange rate)
-        // El valor en WETH equivalente puede diferir ligeramente por el tipo de cambio wstETH
+        // Checks that totalAssets reflects the deposit (approximately, due to exchange rate)
+        // The WETH-equivalent value may differ slightly due to the wstETH exchange rate
         assertApproxEqRel(strategy.totalAssets(), 10 ether, 0.001e18);
     }
 
     /**
-     * @notice Test de depósito solo desde manager
-     * @dev Comprueba que solo el manager pueda depositar
+     * @notice Deposit only from manager test
+     * @dev Checks that only the manager can deposit
      */
     function test_Deposit_RevertIfNotManager() public {
         deal(WETH, address(strategy), 10 ether);
@@ -155,8 +155,8 @@ contract LidoStrategyTest is Test {
     }
 
     /**
-     * @notice Test de depósito de cantidad cero
-     * @dev Comprueba que revierta con cantidad cero
+     * @notice Zero amount deposit test
+     * @dev Checks it reverts with zero amount
      */
     function test_Deposit_RevertZeroAmount() public {
         vm.prank(address(manager));
@@ -164,45 +164,45 @@ contract LidoStrategyTest is Test {
         strategy.deposit(0);
     }
 
-    //* Testing de withdraw
+    //* Withdraw tests
 
     /**
-     * @notice Test de retiro básico de Lido
-     * @dev Comprueba que el retiro intercambie wstETH→WETH via Uniswap y envíe al manager
+     * @notice Basic Lido withdrawal test
+     * @dev Checks that withdrawal swaps wstETH→WETH via Uniswap and sends to manager
      */
     function test_Withdraw_Basic() public {
-        // Deposita primero
+        // Deposits first
         _deposit(10 ether);
 
-        // Retira la mitad
+        // Withdraws half
         _withdraw(5 ether);
 
-        // Comprueba que el manager recibió los fondos (tolerancia 1% por slippage)
+        // Checks that the manager received the funds (1% tolerance for slippage)
         assertApproxEqRel(IERC20(WETH).balanceOf(address(manager)), 5 ether, 0.01e18);
 
-        // Comprueba que queda aproximadamente la mitad
+        // Checks that approximately half remains
         assertApproxEqRel(strategy.totalAssets(), 5 ether, 0.01e18);
     }
 
     /**
-     * @notice Test de retiro total de Lido
-     * @dev Comprueba que se pueda retirar todo el balance
+     * @notice Full Lido withdrawal test
+     * @dev Checks that the entire balance can be withdrawn
      */
     function test_Withdraw_Full() public {
-        // Deposita
+        // Deposits
         _deposit(10 ether);
 
-        // Retira todo (usa totalAssets como referencia del WETH equivalente)
+        // Withdraws everything (uses totalAssets as the WETH equivalent reference)
         uint256 total = strategy.totalAssets();
         _withdraw(total);
 
-        // Comprueba que el balance en la estrategia sea ~0 (1 wei dust posible por redondeo wstETH)
+        // Checks that the balance in the strategy is ~0 (1 wei dust possible due to wstETH rounding)
         assertLe(strategy.totalAssets(), 1);
     }
 
     /**
-     * @notice Test de retiro solo desde manager
-     * @dev Comprueba que solo el manager pueda retirar
+     * @notice Withdraw only from manager test
+     * @dev Checks that only the manager can withdraw
      */
     function test_Withdraw_RevertIfNotManager() public {
         _deposit(10 ether);
@@ -213,8 +213,8 @@ contract LidoStrategyTest is Test {
     }
 
     /**
-     * @notice Test de retiro de cantidad cero
-     * @dev Comprueba que revierta con cantidad cero
+     * @notice Zero amount withdrawal test
+     * @dev Checks it reverts with zero amount
      */
     function test_Withdraw_RevertZeroAmount() public {
         vm.prank(address(manager));
@@ -222,28 +222,28 @@ contract LidoStrategyTest is Test {
         strategy.withdraw(0);
     }
 
-    //* Testing de harvest
+    //* Harvest tests
 
     /**
-     * @notice Test de harvest en Lido
-     * @dev Harvest siempre devuelve 0 en Lido — el yield está embebido en el exchange rate de wstETH
+     * @notice Lido harvest test
+     * @dev Harvest always returns 0 in Lido — yield is embedded in the wstETH exchange rate
      */
     function test_Harvest_AlwaysReturnsZero() public {
-        // Deposita fondos
+        // Deposits funds
         _deposit(10 ether);
 
-        // Avanza tiempo para demostrar que el yield no se obtiene via harvest
+        // Advances time to demonstrate that yield is not obtained via harvest
         skip(30 days);
 
-        // Harvest debe devolver 0 — el yield ya está en el exchange rate
+        // Harvest must return 0 — yield is already in the exchange rate
         vm.prank(address(manager));
         uint256 profit = strategy.harvest();
         assertEq(profit, 0, "Lido harvest debe devolver 0");
     }
 
     /**
-     * @notice Test de harvest solo desde manager
-     * @dev Comprueba que solo el manager pueda llamar harvest
+     * @notice Harvest only from manager test
+     * @dev Checks that only the manager can call harvest
      */
     function test_Harvest_RevertIfNotManager() public {
         vm.prank(alice);
@@ -251,58 +251,58 @@ contract LidoStrategyTest is Test {
         strategy.harvest();
     }
 
-    //* Testing de funciones de consulta
+    //* Query function tests
 
     /**
-     * @notice Test de APY
-     * @dev Comprueba que el APY sea el valor configurado de Lido (400 bps = 4%)
+     * @notice APY test
+     * @dev Checks that APY is the configured Lido value (400 bps = 4%)
      */
     function test_Apy_ReturnsValidValue() public view {
         uint256 apy = strategy.apy();
 
-        // El APY de Lido está hardcodeado en 400 bps (4%)
+        // Lido APY is hardcoded at 400 bps (4%)
         assertEq(apy, 400);
     }
 
     /**
-     * @notice Test de nombre de la estrategia
-     * @dev Comprueba que devuelva el nombre correcto
+     * @notice Strategy name test
+     * @dev Checks that it returns the correct name
      */
     function test_Name() public view {
         assertEq(strategy.name(), "Lido wstETH Strategy");
     }
 
     /**
-     * @notice Test de asset
-     * @dev Comprueba que devuelva la dirección de WETH
+     * @notice Asset test
+     * @dev Checks that it returns the WETH address
      */
     function test_Asset() public view {
         assertEq(strategy.asset(), WETH);
     }
 
     /**
-     * @notice Test de totalAssets sin depósitos
-     * @dev Comprueba que devuelva 0 sin depósitos previos
+     * @notice totalAssets without deposits test
+     * @dev Checks that it returns 0 without prior deposits
      */
     function test_TotalAssets_ZeroWithoutDeposits() public view {
         assertEq(strategy.totalAssets(), 0);
     }
 
     /**
-     * @notice Test de yield embebido en el exchange rate de wstETH
-     * @dev Tras tiempo, totalAssets crece sin necesidad de harvest (yield auto-acumulativo)
+     * @notice Yield embedded in wstETH exchange rate test
+     * @dev Over time, totalAssets grows without needing harvest (auto-compounding yield)
      */
     function test_TotalAssets_GrowsWithTime() public {
-        // Deposita fondos
+        // Deposits funds
         _deposit(100 ether);
         uint256 assets_before = strategy.totalAssets();
 
-        // Avanza 30 días para que el exchange rate de wstETH crezca
+        // Advances 30 days so the wstETH exchange rate grows
         skip(30 days);
-        vm.roll(block.number + 216000); // ~30 días de bloques
+        vm.roll(block.number + 216000); // ~30 days of blocks
 
-        // totalAssets debería ser mayor (yield acumulado via exchange rate)
+        // totalAssets should be greater (yield accumulated via exchange rate)
         uint256 assets_after = strategy.totalAssets();
-        assertGe(assets_after, assets_before, "totalAssets deberia crecer o mantenerse con el tiempo");
+        assertGe(assets_after, assets_before, "totalAssets should grow or stay the same over time");
     }
 }
