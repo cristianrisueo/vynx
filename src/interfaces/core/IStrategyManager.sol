@@ -6,21 +6,21 @@ import {IStrategy} from "../strategies/IStrategy.sol";
 /**
  * @title IStrategyManager
  * @author cristianrisueo
- * @notice Interfaz del gestor de estrategias del protocolo
- * @dev Coordina la asignación de assets entre múltiples estrategias (Aave, Compound, etc.),
- *      gestiona el rebalanceo automático basado en APY y ejecuta harvest de rewards
- * @dev Solo por aclarar, lo creo conveniente: assets = underlying asset del vault, lo verás
- *      mucho en comentarios, por si te confunde
+ * @notice Interface of the protocol strategy manager
+ * @dev Coordinates asset allocation between multiple strategies (Aave, Compound, etc.),
+ *      manages automatic rebalancing based on APY and executes reward harvests
+ * @dev Just to clarify, I think it's worth mentioning: assets = underlying asset of the vault, you'll see
+ *      it a lot in comments, in case it confuses you
  */
 interface IStrategyManager {
     //* Structs
 
     /**
-     * @notice Parametros de configuracion del manager específicos del risk tier, pasados en el constructor
-     * @param max_allocation_per_strategy Allocation maximo por estrategia en basis points
-     * @param min_allocation_threshold Allocation minimo por estrategia en basis points
-     * @param rebalance_threshold Diferencia minima de APY para considerar rebalance
-     * @param min_tvl_for_rebalance TVL minimo para ejecutar rebalance
+     * @notice Manager configuration parameters specific to the risk tier, passed in the constructor
+     * @param max_allocation_per_strategy Maximum allocation per strategy in basis points
+     * @param min_allocation_threshold Minimum allocation per strategy in basis points
+     * @param rebalance_threshold Minimum APY difference to consider rebalancing
+     * @param min_tvl_for_rebalance Minimum TVL to execute rebalance
      */
     struct TierConfig {
         uint256 max_allocation_per_strategy;
@@ -29,193 +29,193 @@ interface IStrategyManager {
         uint256 min_tvl_for_rebalance;
     }
 
-    //* Eventos
+    //* Events
 
     /**
-     * @notice Emitido cuando se asignan assets a una estrategia específica
-     * @param strategy Dirección de la estrategia que recibe los assets
-     * @param assets Cantidad de assets asignados a esta estrategia
+     * @notice Emitted when assets are allocated to a specific strategy
+     * @param strategy Address of the strategy receiving the assets
+     * @param assets Amount of assets allocated to this strategy
      */
     event Allocated(address indexed strategy, uint256 assets);
 
     /**
-     * @notice Emitido cuando se rebalancea capital entre dos estrategias
-     * @param from_strategy Estrategia origen desde donde se retiran los assets
-     * @param to_strategy Estrategia destino hacia donde se mueven los assets
-     * @param assets Cantidad de assets rebalanceados entre estrategias
+     * @notice Emitted when capital is rebalanced between two strategies
+     * @param from_strategy Source strategy from which assets are withdrawn
+     * @param to_strategy Destination strategy to which assets are moved
+     * @param assets Amount of assets rebalanced between strategies
      */
     event Rebalanced(address indexed from_strategy, address indexed to_strategy, uint256 assets);
 
     /**
-     * @notice Emitido cuando se ejecuta harvest en todas las estrategias activas
-     * @param total_profit Profit total generado en assets sumando todas las estrategias
+     * @notice Emitted when harvest is executed on all active strategies
+     * @param total_profit Total profit generated in assets summing all strategies
      */
     event Harvested(uint256 total_profit);
 
     /**
-     * @notice Emitido cuando se añade una nueva estrategia al pool de estrategias disponibles
-     * @param strategy Dirección de la estrategia añadida
+     * @notice Emitted when a new strategy is added to the pool of available strategies
+     * @param strategy Address of the added strategy
      */
     event StrategyAdded(address indexed strategy);
 
     /**
-     * @notice Emitido cuando se elimina una estrategia del pool de estrategias activas
-     * @param strategy Dirección de la estrategia eliminada
+     * @notice Emitted when a strategy is removed from the pool of active strategies
+     * @param strategy Address of the removed strategy
      */
     event StrategyRemoved(address indexed strategy);
 
     /**
-     * @notice Emitido cuando se actualiza la asignación de assets de las estrategias
-     * @dev Esto ocurre cuando se recalculan los porcentajes objetivo de cada estrategia
-     * @dev Normalmente esto precede a un rebalanceo, por lo que no sería raro encontrar el evento
-     *      Rebalanced tras este
+     * @notice Emitted when the asset allocation of strategies is updated
+     * @dev This occurs when target percentages for each strategy are recalculated
+     * @dev Normally this precedes a rebalance, so it would not be unusual to find the
+     *      Rebalanced event after this one
      */
     event TargetAllocationUpdated();
 
     /**
-     * @notice Emitido cuando una estrategia falla durante harvest
-     * @param strategy Direccion de la estrategia que fallo
-     * @param reason Razon del fallo si esta disponible
+     * @notice Emitted when a strategy fails during harvest
+     * @param strategy Address of the strategy that failed
+     * @param reason Reason for failure if available
      */
     event HarvestFailed(address indexed strategy, string reason);
 
     /**
-     * @notice Emitido cuando se inicializa el vault
-     * @param vault Direccion del vault autorizado
+     * @notice Emitted when the vault is initialized
+     * @param vault Address of the authorized vault
      */
     event Initialized(address indexed vault);
 
     /**
-     * @notice Emitido cuando se ejecuta un emergency exit retirando el TVL de las estrategias al vault
-     * @param timestamp Timestamp del bloque en que se ejecutó el emergency exit
-     * @param total_rescued Total de assets rescatados y transferidos al vault
-     * @param strategies_drained Número de estrategias drenadas exitosamente
+     * @notice Emitted when an emergency exit is executed, withdrawing TVL from strategies to the vault
+     * @param timestamp Timestamp of the block in which the emergency exit was executed
+     * @param total_rescued Total assets rescued and transferred to the vault
+     * @param strategies_drained Number of successfully drained strategies
      */
     event EmergencyExit(uint256 timestamp, uint256 total_rescued, uint256 strategies_drained);
 
-    //* Funciones principales
+    //* Main functions
 
     /**
-     * @notice Asigna assets a las estrategias según su APY actual
-     * @dev Primero recibe los assets del vault, luego los distribuye entre las estrategias activas
-     *      priorizando aquellas con mayor APY. La distribución sigue el target allocation calculado
-     *      dinámicamente en base a los APYs de cada estrategia en ese momento
-     * @param amount Cantidad de assets (WETH) a asignar entre las estrategias
+     * @notice Allocates assets to strategies based on their current APY
+     * @dev First receives assets from the vault, then distributes them among active strategies
+     *      prioritizing those with higher APY. Distribution follows the target allocation calculated
+     *      dynamically based on each strategy's APY at that moment
+     * @param amount Amount of assets (WETH) to allocate among strategies
      */
     function allocate(uint256 amount) external;
 
     /**
-     * @notice Retira assets de las estrategias de forma proporcional a su balance actual
-     * @dev Itera sobre todas las estrategias activas y retira proporcionalmente según el amount
-     *      solicitado. Los assets retirados se transfieren directamente al receiver especificado
-     * @param amount Cantidad de assets (WETH) a retirar del pool total de estrategias
-     * @param receiver Dirección que recibirá los assets retirados (generalmente el vault)
+     * @notice Withdraws assets from strategies proportionally to their current balance
+     * @dev Iterates over all active strategies and withdraws proportionally according to the amount
+     *      requested. Withdrawn assets are transferred directly to the specified receiver
+     * @param amount Amount of assets (WETH) to withdraw from the total strategy pool
+     * @param receiver Address that will receive the withdrawn assets (generally the vault)
      */
     function withdrawTo(uint256 amount, address receiver) external;
 
     /**
-     * @notice Rebalancea capital entre estrategias si la operación es rentable
-     * @dev Analiza los APYs actuales de todas las estrategias y mueve capital desde las de menor
-     *      APY hacia las de mayor APY. Solo ejecuta si el profit esperado es mayor a 2x el costo
-     *      del gas, garantizando que el rebalanceo sea económicamente beneficioso
-     * @dev El umbral 2x gas evita pérdidas por rebalanceos frecuentes con ganancias marginales
+     * @notice Rebalances capital between strategies if the operation is profitable
+     * @dev Analyzes the current APYs of all strategies and moves capital from lower
+     *      APY ones to higher APY ones. Only executes if the expected profit is greater than 2x the
+     *      gas cost, ensuring the rebalance is economically beneficial
+     * @dev The 2x gas threshold avoids losses from frequent rebalancing with marginal gains
      */
     function rebalance() external;
 
     /**
-     * @notice Ejecuta harvest en todas las estrategias activas del protocolo
-     * @dev Itera sobre cada estrategia llamando a su función harvest(), recolecta todos los rewards,
-     *      los convierte a asset base y reinvierte automáticamente para maximizar APY compuesto
-     * @return total_profit Profit total generado en assets (WETH) sumando todas las estrategias
+     * @notice Executes harvest on all active protocol strategies
+     * @dev Iterates over each strategy calling its harvest() function, collects all rewards,
+     *      converts them to the base asset and automatically reinvests to maximize compound APY
+     * @return total_profit Total profit generated in assets (WETH) summing all strategies
      */
     function harvest() external returns (uint256 total_profit);
 
-    //* Funciones de gestión de estrategias (onlyOwner)
+    //* Strategy management functions (onlyOwner)
 
     /**
-     * @notice Añade una nueva estrategia al pool de estrategias disponibles
-     * @dev Solo puede ser llamada por el owner. La estrategia debe implementar IStrategy y usar
-     *      el mismo asset base que el resto del protocolo. Una vez añadida, la estrategia estará
-     *      disponible para recibir allocations en futuras distribuciones de capital
-     * @param strategy Dirección del contrato de la estrategia a añadir
+     * @notice Adds a new strategy to the pool of available strategies
+     * @dev Can only be called by the owner. The strategy must implement IStrategy and use
+     *      the same base asset as the rest of the protocol. Once added, the strategy will be
+     *      available to receive allocations in future capital distributions
+     * @param strategy Address of the strategy contract to add
      */
     function addStrategy(address strategy) external;
 
     /**
-     * @notice Elimina una estrategia del pool de estrategias activas
-     * @dev Solo puede ser llamada por el owner. IMPORTANTE: Antes de eliminar una estrategia,
-     *      se debe haber retirado todo su capital mediante withdraw, dejando su balance en 0.
-     *      Esto previene pérdida de fondos al eliminar estrategias con capital activo
-     * @param index Índice de la estrategia en el array de estrategias activas
+     * @notice Removes a strategy from the pool of active strategies
+     * @dev Can only be called by the owner. IMPORTANT: Before removing a strategy,
+     *      all its capital must have been withdrawn via withdraw, leaving its balance at 0.
+     *      This prevents loss of funds when removing strategies with active capital
+     * @param index Index of the strategy in the active strategies array
      */
     function removeStrategy(uint256 index) external;
 
     /**
-     * @notice Drena todas las estrategias activas transfiriendo assets al vault en caso de emergencia
-     * @dev Solo puede ser llamada por el owner. Sin timelock: en emergencias cada segundo cuenta
-     * @dev Usa try-catch: si una estrategia falla, continua con las demas y emite HarvestFailed
-     *      Tras ejecutar, llamar a vault.syncIdleBuffer() para reconciliar el accounting
-     * @dev Secuencia OBLIGATORIA: vault.pause() → manager.emergencyExit() → vault.syncIdleBuffer()
+     * @notice Drains all active strategies by transferring assets to the vault in case of emergency
+     * @dev Can only be called by the owner. No timelock: in emergencies every second counts
+     * @dev Uses try-catch: if a strategy fails, continues with the rest and emits HarvestFailed
+     *      After executing, call vault.syncIdleBuffer() to reconcile the accounting
+     * @dev REQUIRED sequence: vault.pause() → manager.emergencyExit() → vault.syncIdleBuffer()
      */
     function emergencyExit() external;
 
-    //* Funciones de consulta
+    //* Query functions
 
     /**
-     * @notice Comprueba si un rebalanceo sería rentable en el momento actual
-     * @dev Calcula la diferencia de APY entre estrategias y estima si mover capital generaría
-     *      un profit mayor a X el costo del gas. Se usa antes de llamar a rebalance() para
-     *      evitar transacciones que resultarían en pérdida neta
-     * @return profitable True si el rebalanceo sería rentable, false en caso contrario
+     * @notice Checks if a rebalance would be profitable at the current moment
+     * @dev Calculates the APY difference between strategies and estimates whether moving capital would generate
+     *      a profit greater than X times the gas cost. Used before calling rebalance() to
+     *      avoid transactions that would result in a net loss
+     * @return profitable True if the rebalance would be profitable, false otherwise
      */
     function shouldRebalance() external view returns (bool profitable);
 
     /**
-     * @notice Devuelve el valor total de assets bajo gestión en todas las estrategias
-     * @dev Suma el totalAssets() de cada estrategia activa. Representa el TVL (Total Value Locked)
-     *      del strategy manager, incluyendo capital inicial + yields acumulados de todas las estrategias
-     * @return total Valor total en assets gestionados por el strategy manager
+     * @notice Returns the total value of assets under management across all strategies
+     * @dev Sums the totalAssets() of each active strategy. Represents the TVL (Total Value Locked)
+     *      of the strategy manager, including initial capital + accumulated yields from all strategies
+     * @return total Total value in assets managed by the strategy manager
      */
     function totalAssets() external view returns (uint256 total);
 
     /**
-     * @notice Devuelve el número de estrategias activas en el protocolo
-     * @dev Se usa para iterar sobre el array de estrategias o comprobar cuántas estrategias
-     *      están actualmente operativas y recibiendo allocations
-     * @return count Número de estrategias activas
+     * @notice Returns the number of active strategies in the protocol
+     * @dev Used to iterate over the strategies array or check how many strategies
+     *      are currently operational and receiving allocations
+     * @return count Number of active strategies
      */
     function strategiesCount() external view returns (uint256 count);
 
     /**
-     * @notice Devuelve la estrategia ubicada en el índice especificado
-     * @dev Permite acceso directo a cualquier estrategia del array de estrategias activas.
-     *      Útil para iterar sobre todas las estrategias o consultar una específica
-     * @param index Índice de la estrategia en el array (0-indexed)
-     * @return strategy Instancia de la estrategia en ese índice
+     * @notice Returns the strategy located at the specified index
+     * @dev Allows direct access to any strategy in the active strategies array.
+     *      Useful for iterating over all strategies or consulting a specific one
+     * @param index Index of the strategy in the array (0-indexed)
+     * @return strategy Instance of the strategy at that index
      */
     function strategies(uint256 index) external view returns (IStrategy strategy);
 
     /**
-     * @notice Devuelve el porcentaje de allocation de assets para una estrategia específica
-     * @dev El target allocation se calcula dinámicamente en base al APY de cada estrategia.
-     *      Estrategias con mayor APY reciben mayor porcentaje del capital total
-     * @param strategy Dirección de la estrategia a consultar
-     * @return allocation_bps Target allocation en basis points (100 = 1%, 1000 = 10%, 10000 = 100%)
+     * @notice Returns the asset allocation percentage for a specific strategy
+     * @dev The target allocation is calculated dynamically based on each strategy's APY.
+     *      Strategies with higher APY receive a greater percentage of total capital
+     * @param strategy Address of the strategy to query
+     * @return allocation_bps Target allocation in basis points (100 = 1%, 1000 = 10%, 10000 = 100%)
      */
     function target_allocation(IStrategy strategy) external view returns (uint256 allocation_bps);
 
     /**
-     * @notice Devuelve la dirección del vault principal del protocolo
-     * @dev El vault es el contrato que interactúa directamente con los usuarios (hasta que llegue el router)
-     *      y delega a gestión de assets al strategy manager. Es el punto de entrada de deposits/withdrawals
-     * @return vault_address Dirección del contrato vault
+     * @notice Returns the address of the protocol's main vault
+     * @dev The vault is the contract that interacts directly with users (until the router arrives)
+     *      and delegates asset management to the strategy manager. It is the entry point for deposits/withdrawals
+     * @return vault_address Address of the vault contract
      */
     function vault() external view returns (address vault_address);
 
     /**
-     * @notice Devuelve la dirección del underlying asset que gestiona el protocolo
-     * @dev Todas las estrategias deben usar este mismo asset
-     * @return asset_address Dirección del token usado como underlying asset
+     * @notice Returns the address of the underlying asset managed by the protocol
+     * @dev All strategies must use this same asset
+     * @return asset_address Address of the token used as the underlying asset
      */
     function asset() external view returns (address asset_address);
 }

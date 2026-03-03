@@ -9,40 +9,40 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 /**
  * @title Handler
  * @author cristianrisueo
- * @notice Contrato intermediario que acota las llamadas al vault para invariant testing
- * @dev Sin un handler, Foundry llamaría funciones con inputs inválidos y perdería
- *      el 99% del tiempo en reverts inútiles. El handler garantiza que las llamadas
- *      tengan sentido, permitiendo al fuzzer encontrar bugs reales
+ * @notice Intermediary contract that bounds vault calls for invariant testing
+ * @dev Without a handler, Foundry would call functions with invalid inputs and waste
+ *      99% of the time on useless reverts. The handler guarantees that calls
+ *      make sense, allowing the fuzzer to find real bugs
  */
 contract Handler is Test {
     //* Variables de estado
 
-    /// @notice Instancia del vault a testear
+    /// @notice Vault instance under test
     Vault public vault;
 
-    /// @notice Instancia del router
+    /// @notice Router instance
     Router public router;
 
-    /// @notice Dirección del contrato WETH en Mainnet
+    /// @notice WETH contract address on Mainnet
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
 
-    /// @notice Dirección del contrato USDC en Mainnet
+    /// @notice USDC contract address on Mainnet
     address constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
 
-    /// @notice Lista de usuarios simulados
+    /// @notice List of simulated users
     address[] public actors;
 
-    /// @notice Variables fantasma: total depositado y total retirado (para verificar solvencia)
+    /// @notice Ghost variables: total deposited and total withdrawn (for solvency verification)
     uint256 public ghost_totalDeposited;
     uint256 public ghost_totalWithdrawn;
 
     //* Constructor
 
     /**
-     * @notice Inicializa el handler con el vault, router y los actores disponibles
-     * @param _vault Instancia del vault a testear
-     * @param _router Instancia del router a testear
-     * @param _actors Lista de direcciones que pueden interactuar
+     * @notice Initializes the handler with the vault, router and available actors
+     * @param _vault Vault instance under test
+     * @param _router Router instance under test
+     * @param _actors List of addresses that can interact
      */
     constructor(Vault _vault, Router _router, address[] memory _actors) {
         vault = _vault;
@@ -50,39 +50,39 @@ contract Handler is Test {
         actors = _actors;
     }
 
-    //* Acciones acotadas que el fuzzer puede ejecutar
+    //* Bounded actions the fuzzer can execute
 
     /**
-     * @notice Acción: Depositar en el vault con inputs acotados
-     * @dev El fuzzer elige un actor aleatorio y un amount válido,
-     *      acota amount entre min_deposit y lo que queda de TVL
-     * @param actor_seed Seed para elegir un actor aleatorio
-     * @param amount Cantidad aleatoria a depositar
+     * @notice Action: Deposit into the vault with bounded inputs
+     * @dev The fuzzer picks a random actor and a valid amount,
+     *      bounds amount between min_deposit and remaining TVL
+     * @param actor_seed Seed to pick a random actor
+     * @param amount Random amount to deposit
      */
     function deposit(uint256 actor_seed, uint256 amount) external {
-        // Elige un actor aleatorio del array
+        // Picks a random actor from the array
         address actor = actors[actor_seed % actors.length];
 
-        // Obtiene TVL máximo permitido y TVL actual
+        // Gets maximum allowed TVL and current TVL
         uint256 max_tvl = vault.max_tvl();
         uint256 current_total = vault.totalAssets();
 
-        // Si ya se ha superado el máximo TVL permitido, no hace nada
+        // If maximum allowed TVL has been exceeded, does nothing
         if (current_total >= max_tvl) return;
 
-        // Calcula el espacio disponible en el vault (max_tvl - tvl_actual)
+        // Calculates available space in the vault (max_tvl - current_tvl)
         uint256 available = max_tvl - current_total;
 
-        // Obtiene el mínimo depósito (0.001 WETH creo recordar)
+        // Gets minimum deposit (0.001 WETH I think)
         uint256 min = vault.min_deposit();
 
-        // Si no hay espacio suficiente para el depósito mínimo, no hace nada
+        // If there is not enough space for the minimum deposit, does nothing
         if (available < min) return;
 
-        // Acota amount al rango válido
+        // Bounds amount to the valid range
         amount = bound(amount, min, available);
 
-        // Ejecuta el depósito como el actor elegido
+        // Executes the deposit as the chosen actor
         deal(WETH, actor, amount);
         vm.startPrank(actor);
 
@@ -91,49 +91,49 @@ contract Handler is Test {
 
         vm.stopPrank();
 
-        // Actualiza ghost variable para tracking
+        // Updates ghost variable for tracking
         ghost_totalDeposited += amount;
     }
 
     /**
-     * @notice Acción: Retirar del vault con inputs acotados
-     * @dev Solo retira si el actor tiene shares. Acota el retiro al máximo posible
-     * @param actor_seed Seed para elegir un actor aleatorio
-     * @param amount Cantidad aleatoria a retirar
+     * @notice Action: Withdraw from the vault with bounded inputs
+     * @dev Only withdraws if the actor has shares. Bounds withdrawal to maximum possible
+     * @param actor_seed Seed to pick a random actor
+     * @param amount Random amount to withdraw
      */
     function withdraw(uint256 actor_seed, uint256 amount) external {
-        // Elige un actor aleatorio
+        // Picks a random actor
         address actor = actors[actor_seed % actors.length];
 
-        // Comprueba que el actor tenga shares
+        // Checks that the actor has shares
         uint256 actor_shares = vault.balanceOf(actor);
         if (actor_shares == 0) return;
 
-        // Calcula el máximo que puede retirar (neto, después de fees)
-        // previewRedeem devuelve assets netos que recibiría por sus shares
+        // Calculates the maximum they can withdraw (net, after fees)
+        // previewRedeem returns the net assets they would receive for their shares
         uint256 max_withdraw = vault.previewRedeem(actor_shares);
         if (max_withdraw == 0) return;
 
-        // Acota amount al rango posible (mínimo 1 wei para evitar ZeroAmount)
+        // Bounds amount to the possible range (minimum 1 wei to avoid ZeroAmount)
         amount = bound(amount, 1, max_withdraw);
 
-        // Ejecuta el retiro
+        // Executes the withdrawal
         vm.prank(actor);
         vault.withdraw(amount, actor, actor);
 
-        // Actualiza ghost variable
+        // Updates ghost variable
         ghost_totalWithdrawn += amount;
     }
 
     /**
-     * @notice Acción: Ejecuta harvest (cosecha rewards de estrategias)
-     * @dev Accion aleatoria 3: keeper ejecuta harvest si hay profit minimo
+     * @notice Action: Executes harvest (collects strategy rewards)
+     * @dev Random action 3: keeper executes harvest if minimum profit is present
      */
     function harvest() external {
-        // Skip tiempo para acumular yield
+        // Skips time to accumulate yield
         skip(bound(block.timestamp, 1 days, 7 days));
 
-        // Solo harvest si hay suficiente profit
+        // Only harvest if there is enough profit
         if (vault.totalAssets() > vault.min_profit_for_harvest()) {
             vault.harvest();
         }
@@ -142,7 +142,7 @@ contract Handler is Test {
     //* === Router Actions ===
 
     /**
-     * @notice Acción: Depositar ETH vía Router
+     * @notice Action: Deposit ETH via Router
      */
     function routerZapDepositETH(uint256 actor_seed, uint256 amount) external {
         address actor = actors[actor_seed % actors.length];
@@ -168,7 +168,7 @@ contract Handler is Test {
     }
 
     /**
-     * @notice Acción: Depositar USDC vía Router
+     * @notice Action: Deposit USDC via Router
      */
     function routerZapDepositUSDC(uint256 actor_seed, uint256 amount) external {
         address actor = actors[actor_seed % actors.length];
@@ -183,10 +183,10 @@ contract Handler is Test {
 
         if (available < min) return;
 
-        // USDC tiene 6 decimales, WETH tiene 18
-        // 1 USDC ~= 0.0004 WETH (asumiendo precio ETH ~$2500)
-        // Acotar amount en USDC
-        amount = bound(amount, min * 2500 / 1e12, available * 2500 / 1e12); // conversión burda WETH → USDC
+        // USDC has 6 decimals, WETH has 18
+        // 1 USDC ~= 0.0004 WETH (assuming ETH price ~$2500)
+        // Bound amount in USDC
+        amount = bound(amount, min * 2500 / 1e12, available * 2500 / 1e12); // rough WETH → USDC conversion
 
         deal(USDC, actor, amount);
 
@@ -195,12 +195,12 @@ contract Handler is Test {
         router.zapDepositERC20(USDC, amount, 500, 0);
         vm.stopPrank();
 
-        // Aproximar cantidad depositada en WETH
+        // Approximate deposited amount in WETH
         ghost_totalDeposited += amount * 1e12 / 2500;
     }
 
     /**
-     * @notice Acción: Retirar vía Router a ETH
+     * @notice Action: Withdraw via Router to ETH
      */
     function routerZapWithdrawETH(uint256 actor_seed, uint256 shares) external {
         address actor = actors[actor_seed % actors.length];

@@ -4,54 +4,54 @@ pragma solidity 0.8.33;
 /**
  * @title ICurveGauge
  * @author cristianrisueo
- * @notice Interfaz del contrato de staking del pool stETH/ETH de Curve
+ * @notice Interface for the Curve stETH/ETH pool staking contract
  *
- * @dev Gauge (medir) es el nombre que Curve le da a su contrato de staking
- *      permite stakear LP tokens del pool para recibir rewards (CRV, LDO... hay 8)
- *      Estos putos primitivos siempre poniéndoles nombres frikis, CurveStake joder
+ * @dev Gauge is the name Curve gives to its staking contract —
+ *      it allows staking pool LP tokens to receive rewards (CRV, LDO... there are 8).
+ *      These fucking primitives always giving things nerdy names, CurveStake fuck's sake.
  *
- * @dev Los contratos reales de Curve están escritos en Vyper
- *      Esta interfaz Solidity está derivada del ABI del contrato deployado
- *      Solo contiene las funciones necesarias para CurveStrategy
+ * @dev The real Curve contracts are written in Vyper.
+ *      This Solidity interface is derived from the ABI of the deployed contract.
+ *      It only contains the functions needed for CurveStrategy.
  *
- * @dev Signatures verificadas contra el contrato de mainnet:
+ * @dev Signatures verified against the mainnet contract:
  *      https://etherscan.io/address/0x182B723a58739a9c974cFDB385ceaDb237453c28
  */
 interface ICurveGauge {
     /**
-     * @notice Deposita LP tokens en el gauge
-     * @dev El caller debe haber aprobado previamente los LP tokens al gauge
-     * @param _value Cantidad de LP tokens a stakear
+     * @notice Deposits LP tokens into the gauge
+     * @dev The caller must have previously approved LP tokens to the gauge
+     * @param _value Amount of LP tokens to stake
      */
     function deposit(uint256 _value) external;
 
     /**
-     * @notice Redime los LP tokens del gauge
-     * @param _value Cantidad de LP tokens a retirar
+     * @notice Redeems LP tokens from the gauge
+     * @param _value Amount of LP tokens to withdraw
      */
     function withdraw(uint256 _value) external;
 
     /**
-     * @notice Reclama los rewards acumulados (CRV, LDO, etc.)
-     * @dev En el gauge de stETH, claim_rewards permite reclamar los rewards de
-     *      cualquier address, no solo propios (permite economías de keeper bots)
-     * @param _addr Dirección para la cual reclamar rewards
+     * @notice Claims accumulated rewards (CRV, LDO, etc.)
+     * @dev In the stETH gauge, claim_rewards allows claiming rewards from
+     *      any address, not just one's own (enables keeper bot economies)
+     * @param _addr Address for which to claim rewards
      */
     function claim_rewards(address _addr) external;
 
     /**
-     * @notice Devuelve el balance de LP tokens stakeados de una dirección
-     * @param _addr Dirección a consultar
-     * @return Balance de LP tokens stakeados
+     * @notice Returns the balance of staked LP tokens for an address
+     * @param _addr Address to query
+     * @return Balance of staked LP tokens
      */
     function balanceOf(address _addr) external view returns (uint256);
 
     /**
-     * @notice Devuelve la dirección del token de rewards en el índice dado
-     * @dev El gauge soporta hasta 8 reward tokens (MAX_REWARDS = 8).
-     *      normalmente: index 0 = CRV, index 1 = LDO, el resto los desconozco
-     * @param _index Índice del reward token
-     * @return Dirección del reward token (address(0) si no hay más)
+     * @notice Returns the address of the reward token at the given index
+     * @dev The gauge supports up to 8 reward tokens (MAX_REWARDS = 8).
+     *      Normally: index 0 = CRV, index 1 = LDO, the rest I have no idea
+     * @param _index Index of the reward token
+     * @return Address of the reward token (address(0) if no more)
      */
     function reward_tokens(uint256 _index) external view returns (address);
 }

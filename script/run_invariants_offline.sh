@@ -4,35 +4,35 @@ set -e
 
 #######################################################################################
 # Script: run_invariants_offline.sh
-# Propósito: Ejecutar tests de invariantes sin rate limits mediante configuración
-#            de rate limiting inteligente en Anvil
+# Purpose: Run invariant tests without rate limits via intelligent
+#          rate limiting configuration in Anvil
 #
-# Estrategia:
-#   1. Anvil con --compute-units-per-second limitado (evita 429)
-#   2. Warmup del cache con test de integración
-#   3. Fuzzing con runs configurables
-#   4. Cleanup automático de procesos y archivos temporales
+# Strategy:
+#   1. Anvil with limited --compute-units-per-second (avoids 429)
+#   2. Cache warmup with integration test
+#   3. Fuzzing with configurable runs
+#   4. Automatic cleanup of processes and temporary files
 #
-# Uso:
+# Usage:
 #   ./script/run_invariants_offline.sh [options]
 #
-# Opciones:
-#   -r, --runs <N>       Número de runs del fuzzer (default: 32)
-#   -b, --block <N>      Bloque de fork (default: 21792000)
-#   -h, --help           Muestra ayuda
+# Options:
+#   -r, --runs <N>       Number of fuzzer runs (default: 32)
+#   -b, --block <N>      Fork block (default: 21792000)
+#   -h, --help           Show help
 #
-# Ejemplos:
-#   ./script/run_invariants_offline.sh                    # 32 runs, bloque default
+# Examples:
+#   ./script/run_invariants_offline.sh                    # 32 runs, default block
 #   ./script/run_invariants_offline.sh -r 64              # 64 runs
-#   ./script/run_invariants_offline.sh -b 21800000        # Bloque custom
-#   ./script/run_invariants_offline.sh -r 16 -b 21800000  # Ambos custom
+#   ./script/run_invariants_offline.sh -b 21800000        # Custom block
+#   ./script/run_invariants_offline.sh -r 16 -b 21800000  # Both custom
 #######################################################################################
 
-# Navega al directorio raíz del proyecto (donde está foundry.toml)
+# Navigate to project root (where foundry.toml lives)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
-# Colores
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -40,7 +40,7 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Configuración default
+# Default configuration
 ALCHEMY_URL="https://eth-mainnet.g.alchemy.com/v2/YfrbfXNhnCGQkJeTMXPPi"
 FORK_BLOCK="21792000"
 ANVIL_PORT="8545"
@@ -52,7 +52,7 @@ COMPUTE_UNITS_PER_SECOND=1
 REQUEST_TIMEOUT=120000
 STATE_FILE="./anvil_state_temp.json"
 
-# Parse argumentos
+# Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
         -r|--runs)
@@ -64,21 +64,21 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -h|--help)
-            echo "Uso: $0 [options]"
+            echo "Usage: $0 [options]"
             echo ""
-            echo "Opciones:"
-            echo "  -r, --runs <N>    Número de runs (default: 32)"
-            echo "  -b, --block <N>   Bloque de fork (default: 10164266)"
-            echo "  -h, --help        Muestra esta ayuda"
+            echo "Options:"
+            echo "  -r, --runs <N>    Number of runs (default: 32)"
+            echo "  -b, --block <N>   Fork block (default: 10164266)"
+            echo "  -h, --help        Show this help"
             echo ""
-            echo "Ejemplos:"
+            echo "Examples:"
             echo "  $0 -r 64          # 64 runs"
-            echo "  $0 -b 10200000    # Bloque custom"
+            echo "  $0 -b 10200000    # Custom block"
             exit 0
             ;;
         *)
-            echo -e "${RED}Error: Argumento desconocido '$1'${NC}"
-            echo "Usa -h o --help para ver opciones"
+            echo -e "${RED}Error: Unknown argument '$1'${NC}"
+            echo "Use -h or --help to see options"
             exit 1
             ;;
     esac
@@ -86,29 +86,29 @@ done
 
 TOTAL_CALLS=$((INVARIANT_RUNS * INVARIANT_DEPTH))
 
-# Funciones de output
+# Output functions
 print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[✓]${NC} $1"; }
 print_error() { echo -e "${RED}[✗]${NC} $1"; }
 print_step() { echo -e "${CYAN}▶${NC} $1"; }
 
-# Cleanup automático
+# Automatic cleanup
 cleanup() {
-    print_info "Limpiando..."
+    print_info "Cleaning up..."
 
-    # Mata Anvil
+    # Kill Anvil
     if [ ! -z "$ANVIL_PID" ] && kill -0 "$ANVIL_PID" 2>/dev/null; then
         kill "$ANVIL_PID" 2>/dev/null || true
         sleep 1
     fi
     pkill -f "anvil.*$ANVIL_PORT" 2>/dev/null || true
 
-    # Libera puerto
+    # Free port
     if lsof -Pi :${ANVIL_PORT} -sTCP:LISTEN -t >/dev/null 2>&1; then
         lsof -ti:${ANVIL_PORT} | xargs kill -9 2>/dev/null || true
     fi
 
-    # Elimina archivos temporales (el state_file lo mantenemos para cache)
+    # Remove temporary files (keep state_file for cache)
     rm -f /tmp/anvil_offline.log /tmp/warmup.log 2>/dev/null || true
 }
 
@@ -121,26 +121,26 @@ echo -e "${CYAN}║${NC}  ${GREEN}AaveVault Invariant Testing${NC} - Anti-Rate-L
 echo -e "${CYAN}╚════════════════════════════════════════════════════╝${NC}"
 echo ""
 
-# Verificar dependencias
+# Check dependencies
 if ! command -v anvil &> /dev/null || ! command -v forge &> /dev/null; then
-    print_error "Foundry no encontrado. Instala: curl -L https://foundry.paradigm.xyz | bash"
+    print_error "Foundry not found. Install: curl -L https://foundry.paradigm.xyz | bash"
     exit 1
 fi
-print_success "Foundry disponible"
+print_success "Foundry available"
 
-# Mostrar configuración
+# Show configuration
 echo ""
-print_step "Configuración"
-echo "  Fork: Mainnet bloque $FORK_BLOCK"
+print_step "Configuration"
+echo "  Fork: Mainnet block $FORK_BLOCK"
 echo "  Fuzzing: $INVARIANT_RUNS runs × $INVARIANT_DEPTH depth = $TOTAL_CALLS calls"
 echo "  Rate limit: $COMPUTE_UNITS_PER_SECOND CU/s"
 echo ""
 
-# Cleanup previo
+# Previous cleanup
 cleanup
 
-# FASE 1: Inicio de Anvil
-print_step "Iniciando Anvil con rate limiting..."
+# PHASE 1: Start Anvil
+print_step "Starting Anvil with rate limiting..."
 anvil \
     --fork-url "$ALCHEMY_URL" \
     --fork-block-number "$FORK_BLOCK" \
@@ -156,7 +156,7 @@ ANVIL_PID=$!
 
 sleep 5
 
-# Espera a Anvil
+# Wait for Anvil
 for i in {1..60}; do
     if curl -s -X POST "$ANVIL_RPC" -H "Content-Type: application/json" \
         --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
@@ -164,17 +164,17 @@ for i in {1..60}; do
         break
     fi
     if [ $i -eq 60 ]; then
-        print_error "Timeout esperando Anvil"
+        print_error "Timeout waiting for Anvil"
         cat /tmp/anvil_offline.log
         exit 1
     fi
     sleep 1
 done
 
-print_success "Anvil listo (PID: $ANVIL_PID)"
+print_success "Anvil ready (PID: $ANVIL_PID)"
 
-# FASE 2: Warmup
-print_step "Calentando cache..."
+# PHASE 2: Warmup
+print_step "Warming up cache..."
 forge test \
     --match-path test/integration/FullFlow.t.sol \
     --match-test "test_E2E_DepositAllocateWithdraw" \
@@ -182,11 +182,11 @@ forge test \
     --silent \
     > /tmp/warmup.log 2>&1 || true
 
-print_success "Cache listo"
+print_success "Cache ready"
 
-# FASE 3: Tests de invariantes
+# PHASE 3: Invariant tests
 echo ""
-print_step "Ejecutando tests de invariantes ($INVARIANT_RUNS runs)..."
+print_step "Running invariant tests ($INVARIANT_RUNS runs)..."
 echo ""
 
 export FOUNDRY_INVARIANT_RUNS=$INVARIANT_RUNS
@@ -201,21 +201,21 @@ else
     TEST_EXIT_CODE=$?
 fi
 
-# FASE 4: Reporte
+# PHASE 4: Report
 echo ""
 if [ $TEST_EXIT_CODE -eq 0 ]; then
     echo -e "${GREEN}╔════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║${NC}              ${GREEN}✓ TESTS PASADOS ✓${NC}                    ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}              ${GREEN}✓ TESTS PASSED ✓${NC}                    ${GREEN}║${NC}"
     echo -e "${GREEN}╠════════════════════════════════════════════════════╣${NC}"
-    echo -e "${GREEN}║${NC}  • Solvencia: OK                                ${GREEN}║${NC}"
-    echo -e "${GREEN}║${NC}  • Integridad: OK                               ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}  • Solvency: OK                                ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}  • Integrity: OK                               ${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}  • Total: $INVARIANT_RUNS runs × $INVARIANT_DEPTH depth = $TOTAL_CALLS calls        ${GREEN}║${NC}"
     echo -e "${GREEN}╚════════════════════════════════════════════════════╝${NC}"
 else
     echo -e "${RED}╔════════════════════════════════════════════════════╗${NC}"
-    echo -e "${RED}║${NC}              ${RED}✗ TESTS FALLARON ✗${NC}                    ${RED}║${NC}"
+    echo -e "${RED}║${NC}              ${RED}✗ TESTS FAILED ✗${NC}                    ${RED}║${NC}"
     echo -e "${RED}╠════════════════════════════════════════════════════╣${NC}"
-    echo -e "${RED}║${NC}  Revisa los logs arriba para detalles            ${RED}║${NC}"
+    echo -e "${RED}║${NC}  Check the logs above for details                ${RED}║${NC}"
     echo -e "${RED}╚════════════════════════════════════════════════════╝${NC}"
 fi
 

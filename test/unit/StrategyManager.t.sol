@@ -15,19 +15,19 @@ import {IWETH} from "@aave/contracts/misc/interfaces/IWETH.sol";
 /**
  * @title StrategyManagerTest
  * @author cristianrisueo
- * @notice Tests unitarios para StrategyManager con fork de Mainnet
- * @dev Fork test real - valida allocation, withdrawals y rebalancing
+ * @notice Unit tests for StrategyManager with Mainnet fork
+ * @dev Real fork test - validates allocation, withdrawals and rebalancing
  */
 contract StrategyManagerTest is Test {
     //* Variables de estado
 
-    /// @notice Instancia del manager, vault y estrategias
+    /// @notice Manager, vault and strategy instances
     StrategyManager public manager;
     Vault public vault;
     AaveStrategy public aave_strategy;
     LidoStrategy public lido_strategy;
 
-    /// @notice Direcciones de los contratos en Mainnet
+    /// @notice Mainnet contract addresses
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant WSTETH = 0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0;
     address constant STETH = 0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84;
@@ -39,24 +39,24 @@ contract StrategyManagerTest is Test {
     address constant POSITION_MANAGER = 0xC36442b4a4522E871399CD717aBDD847Ab11FE88;
     uint24 constant POOL_FEE = 3000;
 
-    /// @notice Usuarios de prueba
+    /// @notice Test users
     address public alice = makeAddr("alice");
     address public treasury;
 
-    //* Setup del entorno de testing
+    //* Testing environment setup
 
     /**
-     * @notice Configura el entorno de testing
-     * @dev Fork de Mainnet para comportamiento real de protocolos
+     * @notice Configures the testing environment
+     * @dev Mainnet fork for real protocol behavior
      */
     function setUp() public {
-        // Crea un fork de Mainnet
+        // Creates a Mainnet fork
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Setea el treasury
+        // Sets the treasury
         treasury = makeAddr("treasury");
 
-        // Inicializa el manager con parámetros del tier Balanced
+        // Initializes the manager with Balanced tier parameters
         manager = new StrategyManager(
             WETH,
             IStrategyManager.TierConfig({
@@ -67,7 +67,7 @@ contract StrategyManagerTest is Test {
             })
         );
 
-        // Inicializa el vault con parámetros del tier Balanced
+        // Initializes the vault with Balanced tier parameters
         vault = new Vault(
             WETH,
             address(manager),
@@ -82,7 +82,7 @@ contract StrategyManagerTest is Test {
         );
         manager.initialize(address(vault));
 
-        // Inicializa las estrategias con las direcciones reales de mainnet
+        // Initializes the strategies with real mainnet addresses
         aave_strategy = new AaveStrategy(
             address(manager),
             WETH,
@@ -98,10 +98,10 @@ contract StrategyManagerTest is Test {
         );
         lido_strategy = new LidoStrategy(address(manager), WSTETH, WETH, UNISWAP_ROUTER, uint24(500));
 
-        // Mock Aave APY para que allocation funcione con ambas estrategias
+        // Mock Aave APY so allocation works with both strategies
         vm.mockCall(address(aave_strategy), abi.encodeWithSignature("apy()"), abi.encode(uint256(300)));
 
-        // Añade las estrategias
+        // Adds the strategies
         manager.addStrategy(address(aave_strategy));
         manager.addStrategy(address(lido_strategy));
 
@@ -133,77 +133,77 @@ contract StrategyManagerTest is Test {
 
     receive() external payable {}
 
-    //* Funciones internas helpers
+    //* Internal helper functions
 
     /**
-     * @notice Helper para simular allocation desde el vault
-     * @dev Transfiere WETH al manager y llama allocate como vault
-     * @param amount Cantidad a allocar
+     * @notice Helper to simulate allocation from the vault
+     * @dev Transfers WETH to the manager and calls allocate as vault
+     * @param amount Amount to allocate
      */
     function _allocateFromVault(uint256 amount) internal {
-        // Da WETH al vault y lo transfiere al manager
+        // Gives WETH to the vault and transfers it to the manager
         deal(WETH, address(vault), amount);
         vm.prank(address(vault));
         IERC20(WETH).transfer(address(manager), amount);
 
-        // Llama allocate como vault
+        // Calls allocate as vault
         vm.prank(address(vault));
         manager.allocate(amount);
     }
 
     /**
-     * @notice Helper para simular withdrawal hacia el vault
-     * @param amount Cantidad a retirar
+     * @notice Helper to simulate withdrawal to the vault
+     * @param amount Amount to withdraw
      */
     function _withdrawToVault(uint256 amount) internal {
         vm.prank(address(vault));
         manager.withdrawTo(amount, address(vault));
     }
 
-    //* Testing de inicialización
+    //* Initialization tests
 
     /**
-     * @notice Test de inicialización del vault
-     * @dev Comprueba que solo se pueda inicializar una vez
+     * @notice Vault initialization test
+     * @dev Checks that it can only be initialized once
      */
     function test_InitializeVault_RevertIfAlreadyInitialized() public {
-        // Intenta inicializar de nuevo
+        // Attempts to initialize again
         vm.expectRevert(StrategyManager.StrategyManager__VaultAlreadyInitialized.selector);
         manager.initialize(alice);
     }
 
-    //* Testing de allocation
+    //* Allocation tests
 
     /**
-     * @notice Test de allocation básico
-     * @dev Comprueba que los fondos se distribuyan a las estrategias
+     * @notice Basic allocation test
+     * @dev Checks that funds are distributed to strategies
      */
     function test_Allocate_Basic() public {
-        // Alloca fondos
+        // Allocates funds
         _allocateFromVault(100 ether);
 
-        // Comprueba que las estrategias recibieron fondos
+        // Checks that strategies received funds
         assertGt(aave_strategy.totalAssets(), 0);
         assertGt(lido_strategy.totalAssets(), 0);
 
-        // Comprueba que el total sea aproximadamente el allocado
+        // Checks that total is approximately the allocated amount
         assertApproxEqRel(manager.totalAssets(), 100 ether, 0.001e18);
     }
 
     /**
-     * @notice Test de allocation solo desde vault
-     * @dev Comprueba que solo el vault pueda llamar allocate
+     * @notice Allocation only from vault test
+     * @dev Checks that only the vault can call allocate
      */
     function test_Allocate_RevertIfNotVault() public {
-        // Intenta allocar como alice
+        // Attempts to allocate as alice
         vm.prank(alice);
         vm.expectRevert(StrategyManager.StrategyManager__OnlyVault.selector);
         manager.allocate(100 ether);
     }
 
     /**
-     * @notice Test de allocation con cantidad cero
-     * @dev Comprueba que revierta con cantidad cero
+     * @notice Allocation with zero amount test
+     * @dev Checks it reverts with zero amount
      */
     function test_Allocate_RevertZero() public {
         vm.prank(address(vault));
@@ -212,11 +212,11 @@ contract StrategyManagerTest is Test {
     }
 
     /**
-     * @notice Test de allocation sin estrategias
-     * @dev Comprueba que revierta si no hay estrategias disponibles
+     * @notice Allocation without strategies test
+     * @dev Checks it reverts if there are no available strategies
      */
     function test_Allocate_RevertNoStrategies() public {
-        // Crea un nuevo manager sin estrategias (misma config para que compile)
+        // Creates a new manager without strategies (same config so it compiles)
         StrategyManager empty_manager = new StrategyManager(
             WETH,
             IStrategyManager.TierConfig({
@@ -233,29 +233,29 @@ contract StrategyManagerTest is Test {
         empty_manager.allocate(100 ether);
     }
 
-    //* Testing de withdrawals
+    //* Withdrawal tests
 
     /**
-     * @notice Test de withdrawal básico
-     * @dev Comprueba que se retiren fondos proporcionalmente
+     * @notice Basic withdrawal test
+     * @dev Checks that funds are withdrawn proportionally
      */
     function test_WithdrawTo_Basic() public {
-        // Alloca primero
+        // Allocates first
         _allocateFromVault(100 ether);
 
-        // Retira la mitad
+        // Withdraws half
         _withdrawToVault(50 ether);
 
-        // Comprueba que el vault recibió los fondos (tolerancia 1% por slippage en swaps)
+        // Checks that the vault received the funds (1% tolerance for swap slippage)
         assertApproxEqRel(IERC20(WETH).balanceOf(address(vault)), 50 ether, 0.01e18);
 
-        // Comprueba que el manager tiene aproximadamente la mitad
+        // Checks that the manager has approximately half
         assertApproxEqRel(manager.totalAssets(), 50 ether, 0.01e18);
     }
 
     /**
-     * @notice Test de withdrawal solo desde vault
-     * @dev Comprueba que solo el vault pueda llamar withdrawTo
+     * @notice Withdrawal only from vault test
+     * @dev Checks that only the vault can call withdrawTo
      */
     function test_WithdrawTo_RevertIfNotVault() public {
         vm.prank(alice);
@@ -264,8 +264,8 @@ contract StrategyManagerTest is Test {
     }
 
     /**
-     * @notice Test de withdrawal con cantidad cero
-     * @dev Comprueba que revierta con cantidad cero
+     * @notice Withdrawal with zero amount test
+     * @dev Checks it reverts with zero amount
      */
     function test_WithdrawTo_RevertZero() public {
         vm.prank(address(vault));
@@ -273,14 +273,14 @@ contract StrategyManagerTest is Test {
         manager.withdrawTo(0, address(vault));
     }
 
-    //* Testing de gestión de estrategias
+    //* Strategy management tests
 
     /**
-     * @notice Test de añadir estrategia
-     * @dev Comprueba que se pueda añadir una estrategia correctamente
+     * @notice Add strategy test
+     * @dev Checks that a strategy can be added correctly
      */
     function test_AddStrategy_Basic() public {
-        // Crea un nuevo manager (misma config para que compile)
+        // Creates a new manager (same config so it compiles)
         StrategyManager new_manager = new StrategyManager(
             WETH,
             IStrategyManager.TierConfig({
@@ -291,17 +291,17 @@ contract StrategyManagerTest is Test {
             })
         );
 
-        // Añade estrategia
+        // Adds strategy
         new_manager.addStrategy(address(aave_strategy));
 
-        // Comprueba que se añadió
+        // Checks that it was added
         assertEq(new_manager.strategiesCount(), 1);
         assertTrue(new_manager.is_strategy(address(aave_strategy)));
     }
 
     /**
-     * @notice Test de añadir estrategia duplicada
-     * @dev Comprueba que revierta al añadir duplicada
+     * @notice Add duplicate strategy test
+     * @dev Checks it reverts when adding a duplicate
      */
     function test_AddStrategy_RevertDuplicate() public {
         vm.expectRevert(StrategyManager.StrategyManager__StrategyAlreadyExists.selector);
@@ -309,124 +309,124 @@ contract StrategyManagerTest is Test {
     }
 
     /**
-     * @notice Test de remover estrategia
-     * @dev Comprueba que se pueda remover una estrategia
+     * @notice Remove strategy test
+     * @dev Checks that a strategy can be removed
      */
     function test_RemoveStrategy_Basic() public {
-        // Remueve estrategia (index 0 = aave)
+        // Removes strategy (index 0 = aave)
         manager.removeStrategy(0);
 
-        // Comprueba que se removió
+        // Checks that it was removed
         assertEq(manager.strategiesCount(), 1);
         assertFalse(manager.is_strategy(address(aave_strategy)));
     }
 
     /**
-     * @notice Test de remover estrategia inexistente
-     * @dev Comprueba que revierta al remover inexistente
+     * @notice Remove non-existent strategy test
+     * @dev Checks it reverts when removing a non-existent strategy
      */
     function test_RemoveStrategy_RevertNotFound() public {
         vm.expectRevert(StrategyManager.StrategyManager__StrategyNotFound.selector);
         manager.removeStrategy(99);
     }
 
-    //* Testing de rebalance
+    //* Rebalance tests
 
     /**
-     * @notice Test de rebalance exitoso
-     * @dev Fuerza desbalance y ejecuta rebalance para verificar movimiento de fondos
+     * @notice Successful rebalance test
+     * @dev Forces imbalance and executes rebalance to verify fund movement
      */
     function test_Rebalance_ExecutesSuccessfully() public {
-        // Alloca fondos suficientes para rebalance
+        // Allocates enough funds for rebalance
         _allocateFromVault(100 ether);
 
-        // Guarda balances iniciales
+        // Saves initial balances
         uint256 aave_before = aave_strategy.totalAssets();
         uint256 lido_before = lido_strategy.totalAssets();
 
-        // Cambia el max allocation para forzar desbalance
+        // Changes max allocation to force imbalance
         manager.setMaxAllocationPerStrategy(4000); // 40% max
 
-        // Si shouldRebalance es true, ejecuta rebalance
+        // If shouldRebalance is true, executes rebalance
         if (manager.shouldRebalance()) {
             manager.rebalance();
 
-            // Verifica que hubo movimiento de fondos
+            // Verifies that fund movement occurred
             uint256 aave_after = aave_strategy.totalAssets();
             uint256 lido_after = lido_strategy.totalAssets();
 
-            // Al menos una estrategia debería haber cambiado
+            // At least one strategy should have changed
             bool funds_moved = (aave_after != aave_before) || (lido_after != lido_before);
-            assertTrue(funds_moved, "Rebalance deberia mover fondos");
+            assertTrue(funds_moved, "Rebalance should move funds");
         }
 
-        // El total de assets debe mantenerse aproximadamente igual
+        // Total assets must remain approximately the same
         assertApproxEqRel(manager.totalAssets(), 100 ether, 0.01e18);
     }
 
     /**
-     * @notice Test de rebalance revierte si no es rentable
-     * @dev Comprueba que revierta cuando shouldRebalance es false
+     * @notice Rebalance reverts if not profitable test
+     * @dev Checks it reverts when shouldRebalance is false
      */
     function test_Rebalance_RevertIfNotProfitable() public {
-        // Con TVL bajo, shouldRebalance retorna false
+        // With low TVL, shouldRebalance returns false
         _allocateFromVault(5 ether);
 
-        // Debería revertir porque no es rentable
+        // Should revert because it is not profitable
         vm.expectRevert(StrategyManager.StrategyManager__RebalanceNotProfitable.selector);
         manager.rebalance();
     }
 
-    //* Testing de funciones de consulta
+    //* Query function tests
 
     /**
-     * @notice Test de totalAssets
-     * @dev Comprueba que sume correctamente los assets de todas las estrategias
+     * @notice totalAssets test
+     * @dev Checks that it correctly sums the assets of all strategies
      */
     function test_TotalAssets_SumsAllStrategies() public {
-        // Alloca fondos
+        // Allocates funds
         _allocateFromVault(100 ether);
 
-        // El total debe ser la suma de ambas estrategias
+        // Total must be the sum of both strategies
         uint256 expected = aave_strategy.totalAssets() + lido_strategy.totalAssets();
         assertEq(manager.totalAssets(), expected);
     }
 
     /**
-     * @notice Test de strategiesCount
-     * @dev Comprueba que devuelva el número correcto de estrategias
+     * @notice strategiesCount test
+     * @dev Checks that it returns the correct number of strategies
      */
     function test_StrategiesCount() public view {
         assertEq(manager.strategiesCount(), 2);
     }
 
     /**
-     * @notice Test de getAllStrategiesInfo
-     * @dev Comprueba que devuelva información correcta de las estrategias
+     * @notice getAllStrategiesInfo test
+     * @dev Checks that it returns correct information about strategies
      */
     function test_GetAllStrategiesInfo() public {
-        // Alloca algo para que haya TVL
+        // Allocates something so there is TVL
         _allocateFromVault(100 ether);
 
-        // Obtiene info
+        // Gets info
         (string[] memory names, uint256[] memory apys, uint256[] memory tvls, uint256[] memory targets) =
             manager.getAllStrategiesInfo();
 
-        // Comprueba que tenga 2 estrategias
+        // Checks that it has 2 strategies
         assertEq(names.length, 2);
         assertEq(apys.length, 2);
         assertEq(tvls.length, 2);
         assertEq(targets.length, 2);
 
-        // Comprueba que los targets sumen aproximadamente 100% (puede haber redondeo)
+        // Checks that targets sum approximately 100% (there may be rounding)
         assertApproxEqAbs(targets[0] + targets[1], 10000, 1);
     }
 
-    //* Testing de emergencyExit
+    //* Emergency exit tests
 
     /**
-     * @notice Test de emergencyExit por non-owner
-     * @dev Comprueba que solo el owner pueda ejecutar emergencyExit
+     * @notice emergencyExit by non-owner test
+     * @dev Checks that only the owner can execute emergencyExit
      */
     function test_EmergencyExit_RevertIfNotOwner() public {
         vm.prank(alice);
@@ -435,11 +435,11 @@ contract StrategyManagerTest is Test {
     }
 
     /**
-     * @notice Test de emergencyExit sin estrategias registradas
-     * @dev Comprueba que no revierte y emite evento con total_rescued = 0
+     * @notice emergencyExit without registered strategies test
+     * @dev Checks it does not revert and emits event with total_rescued = 0
      */
     function test_EmergencyExit_NoStrategies() public {
-        // Crea un manager sin estrategias
+        // Creates a manager without strategies
         StrategyManager empty_manager = new StrategyManager(
             WETH,
             IStrategyManager.TierConfig({
@@ -451,7 +451,7 @@ contract StrategyManagerTest is Test {
         );
         empty_manager.initialize(address(vault));
 
-        // Debe ejecutarse sin revertir
+        // Must execute without reverting
         vm.expectEmit(false, false, false, true);
         emit IStrategyManager.EmergencyExit(block.timestamp, 0, 0);
 
@@ -459,88 +459,88 @@ contract StrategyManagerTest is Test {
     }
 
     /**
-     * @notice Test de emergencyExit con estrategias con balance 0
-     * @dev Comprueba que no revierte cuando las estrategias no tienen fondos
+     * @notice emergencyExit with zero-balance strategies test
+     * @dev Checks it does not revert when strategies have no funds
      */
     function test_EmergencyExit_ZeroBalanceStrategies() public {
-        // No allocamos nada, las estrategias tienen balance 0
+        // We don't allocate anything, strategies have balance 0
 
-        // Debe ejecutarse sin revertir y transferir 0 WETH
+        // Must execute without reverting and transfer 0 WETH
         vm.expectEmit(false, false, false, true);
         emit IStrategyManager.EmergencyExit(block.timestamp, 0, 0);
 
         manager.emergencyExit();
 
-        // El vault no debe haber recibido WETH
+        // The vault must not have received WETH
         assertEq(IERC20(WETH).balanceOf(address(vault)), 0);
     }
 
     /**
-     * @notice Test de emergencyExit con estrategias con balance > 0
-     * @dev Comprueba que todo el WETH se transfiera al vault y el manager quede en 0
+     * @notice emergencyExit with strategies with balance > 0 test
+     * @dev Checks that all WETH is transferred to the vault and manager is left at 0
      */
     function test_EmergencyExit_DrainsAllStrategies() public {
-        // Alloca fondos a las estrategias
+        // Allocates funds to strategies
         _allocateFromVault(100 ether);
 
-        // Guarda el balance del vault antes del exit
+        // Saves vault balance before exit
         uint256 vault_balance_before = IERC20(WETH).balanceOf(address(vault));
 
-        // Ejecuta emergencyExit
+        // Executes emergencyExit
         manager.emergencyExit();
 
-        // El balance del manager debe quedar en ~0 (puede quedar polvo por redondeo)
-        assertApproxEqAbs(manager.totalAssets(), 0, 20, "Manager debe quedar vacio tras emergencyExit");
+        // Manager balance must be ~0 (may have dust from rounding)
+        assertApproxEqAbs(manager.totalAssets(), 0, 20, "Manager should be empty after emergencyExit");
 
-        // El vault debe haber recibido WETH (total rescatado, tolerancia 1% por slippage en swaps)
+        // Vault must have received WETH (total rescued, 1% tolerance for swap slippage)
         uint256 vault_balance_after = IERC20(WETH).balanceOf(address(vault));
         uint256 rescued = vault_balance_after - vault_balance_before;
-        assertApproxEqRel(rescued, 100 ether, 0.01e18, "Vault debe recibir ~100% de lo allocado");
+        assertApproxEqRel(rescued, 100 ether, 0.01e18, "Vault should receive ~100% of allocated funds");
     }
 
     /**
-     * @notice Test de emergencyExit verifica que el balance del manager queda en 0
-     * @dev Garantiza que no quedan fondos residuales en el contrato manager
+     * @notice emergencyExit verifies manager balance is left at 0 test
+     * @dev Guarantees that no residual funds remain in the manager contract
      */
     function test_EmergencyExit_ManagerBalanceZero() public {
-        // Alloca fondos
+        // Allocates funds
         _allocateFromVault(50 ether);
 
-        // Ejecuta emergencyExit
+        // Executes emergencyExit
         manager.emergencyExit();
 
-        // El balance de WETH del manager debe ser ~0 (puede quedar residuo del min_allocation_threshold
-        // que el allocator no envio a ninguna estrategia por estar por debajo del umbral minimo)
+        // Manager WETH balance must be ~0 (may have residue from min_allocation_threshold
+        // that the allocator did not send to any strategy because it was below the minimum threshold)
         assertApproxEqAbs(
             IERC20(WETH).balanceOf(address(manager)), 0, 0.01 ether, "Manager WETH balance debe ser ~0"
         );
     }
 
     /**
-     * @notice Test de emergencyExit emite evento con timestamp correcto y 2 estrategias drenadas
-     * @dev Verifica que el evento EmergencyExit se emita con los datos esperados.
-     *      Solo comprobamos timestamp y strategies_drained (total_rescued depende del slippage)
+     * @notice emergencyExit emits event with correct timestamp and 2 drained strategies test
+     * @dev Verifies that the EmergencyExit event is emitted with the expected data.
+     *      We only check timestamp and strategies_drained (total_rescued depends on slippage)
      */
     function test_EmergencyExit_EmitsCorrectEvent() public {
-        // Alloca fondos a las estrategias
+        // Allocates funds to strategies
         _allocateFromVault(100 ether);
 
-        // Espera evento EmergencyExit: check topic (true) pero no los data values exactos
-        // porque total_rescued depende del slippage de swaps en las estrategias
+        // Expects EmergencyExit event: check topic (true) but not exact data values
+        // because total_rescued depends on swap slippage in strategies
         vm.expectEmit(false, false, false, false);
         emit IStrategyManager.EmergencyExit(block.timestamp, 0, 2);
 
         manager.emergencyExit();
     }
 
-    //* Testing de funcionalidad only owner
+    //* Owner-only functionality tests
 
     /**
-     * @notice Test de permisos de administrador
-     * @dev Comprueba que solo el owner pueda cambiar parámetros
+     * @notice Admin permissions test
+     * @dev Checks that only the owner can change parameters
      */
     function test_Admin_OnlyOwnerCanSetParams() public {
-        // Intenta como alice (no owner)
+        // Attempts as alice (not owner)
         vm.startPrank(alice);
         vm.expectRevert();
         manager.setRebalanceThreshold(300);
@@ -554,13 +554,13 @@ contract StrategyManagerTest is Test {
         manager.addStrategy(alice);
         vm.stopPrank();
 
-        // Ejecuta como owner (debería funcionar)
+        // Executes as owner (should work)
         manager.setRebalanceThreshold(300);
         manager.setMinTVLForRebalance(20 ether);
         manager.setMaxAllocationPerStrategy(6000);
         manager.setMinAllocationThreshold(500);
 
-        // Comprueba valores actualizados
+        // Checks updated values
         assertEq(manager.rebalance_threshold(), 300);
         assertEq(manager.min_tvl_for_rebalance(), 20 ether);
         assertEq(manager.max_allocation_per_strategy(), 6000);

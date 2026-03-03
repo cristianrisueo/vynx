@@ -11,94 +11,94 @@ import {IWstETH} from "../interfaces/strategies/lido/IWstETH.sol";
 /**
  * @title LidoStrategy
  * @author cristianrisueo
- * @notice Estrategia que deposita assets en Lido (liquidity staking) y recibe wstETH (wrap. stakingETH)
- * @dev Implementa IStrategy para integración con StrategyManager
+ * @notice Strategy that deposits assets into Lido (liquid staking) and receives wstETH (wrapped staking ETH)
+ * @dev Implements IStrategy for integration with StrategyManager
  *
- * @dev wstETH auto incrementea yield via exchange rate creciente, sin necesidad de harvest manual
- *      No hay rewards que reclamar ni swapear, harvest() de lido siempre devuelve 0
+ * @dev wstETH auto-increments yield via growing exchange rate, no manual harvest needed
+ *      There are no rewards to claim or swap, harvest() from lido always returns 0
  *
- * @dev Flujo de depósito: WETH → ETH (IWETH.withdraw) → wstETH (wstETH.receive)
- * @dev Flujo de retiro: wstETH → WETH directo via swap en Uniswap V3 wstETH/WETH pool
+ * @dev Deposit flow: WETH → ETH (IWETH.withdraw) → wstETH (wstETH.receive)
+ * @dev Withdrawal flow: wstETH → WETH directly via swap on Uniswap V3 wstETH/WETH pool
  */
 contract LidoStrategy is IStrategy {
     //* library attachments
 
     /**
-     * @notice Usa SafeERC20 para todas las operaciones de IERC20 de manera segura
-     * @dev Evita errores comunes con tokens legacy o mal implementados
+     * @notice Uses SafeERC20 for all IERC20 operations safely
+     * @dev Avoids common errors with legacy or poorly implemented tokens
      */
     using SafeERC20 for IERC20;
 
-    //* Errores
+    //* Errors
 
     /**
-     * @notice Error cuando solo el strategy manager puede llamar
+     * @notice Error when only the strategy manager can call
      */
     error LidoStrategy__OnlyManager();
 
     /**
-     * @notice Error cuando se intenta depositar o retirar con cantidad cero
+     * @notice Error when attempting to deposit or withdraw with zero amount
      */
     error LidoStrategy__ZeroAmount();
 
     /**
-     * @notice Error cuando falla el envío de ETH al contrato wstETH para stakear
+     * @notice Error when sending ETH to the wstETH contract for staking fails
      */
     error LidoStrategy__WrapFailed();
 
     /**
-     * @notice Error cuando falla el swap de wstETH a WETH en Uniswap V3
+     * @notice Error when the wstETH to WETH swap on Uniswap V3 fails
      */
     error LidoStrategy__UnwrapFailed();
 
-    //* Constantes
+    //* Constants
 
-    /// @notice Base para cálculos de basis points (10000 = 100%)
+    /// @notice Base for basis points calculations (10000 = 100%)
     uint256 private constant BASIS_POINTS = 10000;
 
-    /// @notice Slippage máximo permitido en swaps en bps (100 = 1%)
+    /// @notice Maximum slippage allowed in swaps in bps (100 = 1%)
     uint256 private constant MAX_SLIPPAGE_BPS = 100;
 
     /**
-     * @notice APY histórico de Lido en basis points (400 = 4%)
-     * @dev Hardcodeado ya que Lido no expone un oracle de APY on-chain de forma simple
-     *      Lido APY histórico: ~3.5-4.5%
+     * @notice Lido historical APY in basis points (400 = 4%)
+     * @dev Hardcoded since Lido does not expose an on-chain APY oracle in a simple way
+     *      Lido historical APY: ~3.5-4.5%
      */
     uint256 private constant LIDO_APY = 400;
 
-    //* Variables de estado
+    //* State variables
 
-    /// @notice Dirección del StrategyManager autorizado
+    /// @notice Address of the authorized StrategyManager
     address public immutable manager;
 
     /**
-     * @notice Instancia del contrato wstETH de Lido
-     * @dev Su receive() acepta ETH y devuelve wstETH stakeando internamente con Lido
+     * @notice Instance of the Lido wstETH contract
+     * @dev Its receive() accepts ETH and returns wstETH by staking internally with Lido
      */
     IWstETH private immutable wst_eth;
 
     /**
-     * @notice Instancia del contrato WETH para convertir WETH ↔ ETH (wraps/unwraps)
-     * @dev WETH.withdraw() convierte WETH → ETH (ETH se recibe en el receive() de este contrato)
+     * @notice Instance of the WETH contract for converting WETH ↔ ETH (wraps/unwraps)
+     * @dev WETH.withdraw() converts WETH → ETH (ETH is received in this contract's receive())
      */
     IWETH private immutable weth;
 
-    /// @notice Dirección del asset subyacente (WETH)
+    /// @notice Address of the underlying asset (WETH)
     address private immutable asset_address;
 
-    /// @notice Instancia del router de Uniswap v3 para swaps
+    /// @notice Instance of the Uniswap v3 router for swaps
     ISwapRouter private immutable uniswap_router;
 
     /**
-     * @notice Fee tier del pool wstETH/WETH en Uniswap V3
-     * @dev El pool principal wstETH/WETH en mainnet usa el tier 500 (0.05%)
+     * @notice Fee tier of the wstETH/WETH pool on Uniswap V3
+     * @dev The main wstETH/WETH pool on mainnet uses tier 500 (0.05%)
      */
     uint24 private immutable pool_fee;
 
-    //* Modificadores
+    //* Modifiers
 
     /**
-     * @notice Solo permite llamadas del StrategyManager
+     * @notice Only allows calls from the StrategyManager
      */
     modifier onlyManager() {
         if (msg.sender != manager) revert LidoStrategy__OnlyManager();
@@ -108,16 +108,16 @@ contract LidoStrategy is IStrategy {
     //* Constructor
 
     /**
-     * @notice Constructor de LidoStrategy
-     * @dev Inicializa la estrategia con Lido y aprueba el router de Uniswap para retirar
-     * @param _manager Dirección del StrategyManager
-     * @param _wst_eth Dirección del contrato wstETH de Lido
-     * @param _weth Dirección del contrato WETH
-     * @param _uniswap_router Dirección del SwapRouter de Uniswap V3
-     * @param _pool_fee Fee tier del pool wstETH/WETH en Uniswap (ej: 500 = 0.05%)
+     * @notice Constructor of LidoStrategy
+     * @dev Initializes the strategy with Lido and approves the Uniswap router for withdrawals
+     * @param _manager Address of the StrategyManager
+     * @param _wst_eth Address of the Lido wstETH contract
+     * @param _weth Address of the WETH contract
+     * @param _uniswap_router Address of the Uniswap V3 SwapRouter
+     * @param _pool_fee Fee tier of the wstETH/WETH pool on Uniswap (e.g. 500 = 0.05%)
      */
     constructor(address _manager, address _wst_eth, address _weth, address _uniswap_router, uint24 _pool_fee) {
-        // Asigna addresses, inicializa contratos y establece el fee tier de UV3
+        // Assigns addresses, initializes contracts and sets the UV3 fee tier
         manager = _manager;
         asset_address = _weth;
         wst_eth = IWstETH(_wst_eth);
@@ -125,83 +125,83 @@ contract LidoStrategy is IStrategy {
         uniswap_router = ISwapRouter(_uniswap_router);
         pool_fee = _pool_fee;
 
-        // Aprueba el router de Uniswap para mover wstETH de este contrato durante los retiros
+        // Approves the Uniswap router to move wstETH from this contract during withdrawals
         IERC20(_wst_eth).forceApprove(_uniswap_router, type(uint256).max);
     }
 
-    //* Funciones especiales
+    //* Special functions
 
     /**
-     * @notice Acepta ETH recibido de WETH.withdraw() antes de depositarlo en Lido
-     * @dev Lido recibe ETH, pero el underlying asset del protocolo es WETH. Solución: Unwrappear
+     * @notice Accepts ETH received from WETH.withdraw() before depositing it into Lido
+     * @dev Lido receives ETH, but the protocol's underlying asset is WETH. Solution: Unwrap
      */
     receive() external payable {}
 
-    //* Funciones principales
+    //* Main functions
 
     /**
-     * @notice Deposita assets en Lido y recibe wstETH que auto-acumula yield
-     * @dev Solo puede ser llamado por el StrategyManager
-     * @dev Asume que los assets ya fueron transferidos a este contrato desde StrategyManager
-     * @param assets Cantidad de WETH a depositar
-     * @return shares Cantidad exacta de wstETH recibida (medida via balance diff)
+     * @notice Deposits assets into Lido and receives wstETH that auto-accumulates yield
+     * @dev Can only be called by the StrategyManager
+     * @dev Assumes assets have already been transferred to this contract from the StrategyManager
+     * @param assets Amount of WETH to deposit
+     * @return shares Exact amount of wstETH received (measured via balance diff)
      */
     function deposit(uint256 assets) external onlyManager returns (uint256 shares) {
-        // Comprueba que la cantidad a depositar no sea 0
+        // Checks that the amount to deposit is not 0
         if (assets == 0) revert LidoStrategy__ZeroAmount();
 
-        // Calcula el balance de wstETH del contrato antes del depósito para calcular shares exactos
+        // Calculates the wstETH balance of the contract before the deposit to compute exact shares
         uint256 wsteth_before = IERC20(address(wst_eth)).balanceOf(address(this));
 
-        // Convierte WETH a ETH. El ETH se recibe en el receive() de este contrato
+        // Converts WETH to ETH. The ETH is received in this contract's receive()
         weth.withdraw(assets);
 
-        // Envía ETH al contrato wstETH. Su receive() lo stakea en Lido y devuelve wstETH
+        // Sends ETH to the wstETH contract. Its receive() stakes it in Lido and returns wstETH
         (bool ok,) = address(wst_eth).call{value: assets}("");
         if (!ok) revert LidoStrategy__WrapFailed();
 
-        // Calcula de nuevo el balance de wstWTH del contrato después del depósito
+        // Calculates the wstETH balance of the contract again after the deposit
         uint256 wsteth_after = IERC20(address(wst_eth)).balanceOf(address(this));
 
-        // Calcula las shares exactas recibidas de Lido como diferencia de balances
+        // Calculates exact shares received from Lido as balance difference
         shares = wsteth_after - wsteth_before;
 
-        // Emite evento de depósito y devuelve los shares calculados
+        // Emits deposit event and returns the calculated shares
         emit Deposited(msg.sender, assets, shares);
     }
 
     /**
-     * @notice Retira assets de Lido swapeando wstETH a WETH via Uniswap V3
-     * @dev Solo puede ser llamado por el StrategyManager
-     * @dev Flujo: calcula wstETH equivalente → swap wstETH a WETH → transfiere WETH al manager
-     * @param assets Cantidad de WETH a retirar
-     * @return actual_withdrawn WETH realmente recibido tras el swap (puede diferir por slippage)
+     * @notice Withdraws assets from Lido by swapping wstETH to WETH via Uniswap V3
+     * @dev Can only be called by the StrategyManager
+     * @dev Flow: calculates equivalent wstETH → swap wstETH to WETH → transfers WETH to manager
+     * @param assets Amount of WETH to withdraw
+     * @return actual_withdrawn WETH actually received after the swap (may differ due to slippage)
      */
     function withdraw(uint256 assets) external onlyManager returns (uint256 actual_withdrawn) {
-        // Comprueba que la cantidad a retirar no sea 0
+        // Checks that the amount to withdraw is not 0
         if (assets == 0) revert LidoStrategy__ZeroAmount();
 
-        // Calcula cuánto wstETH se necesita para obtener la cantidad de WETH. En realidad
-        // calcula wstETH para ETH, pero con ETH y WETH es lo mismo
+        // Calculates how much wstETH is needed to obtain the amount of WETH. In practice
+        // calculates wstETH for ETH, but ETH and WETH are equivalent
         uint256 wsteth_to_swap = wst_eth.getWstETHByStETH(assets);
 
-        // Mínimo WETH esperado del swap (calcula slippage de 1%)
+        // Minimum WETH expected from the swap (calculates 1% slippage)
         uint256 min_weth_out = (assets * (BASIS_POINTS - MAX_SLIPPAGE_BPS)) / BASIS_POINTS;
 
-        // Construye los parámetros del swap exactInputSingle en Uniswap V3
+        // Builds the exactInputSingle swap parameters for Uniswap V3
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
             tokenIn: address(wst_eth), // Token A (wstETH)
             tokenOut: asset_address, // Token B (WETH)
             fee: pool_fee, // Fee tier
-            recipient: address(this), // Address que recibe el swap (este contrato)
-            deadline: block.timestamp, // A ejecutar en este bloque
-            amountIn: wsteth_to_swap, // Cantidad del token A a swapear
-            amountOutMinimum: min_weth_out, // Mínima cantidad esperada del Token B
-            sqrtPriceLimitX96: 0 // Sin límite de precio
+            recipient: address(this), // Address receiving the swap (this contract)
+            deadline: block.timestamp, // To be executed in this block
+            amountIn: wsteth_to_swap, // Amount of token A to swap
+            amountOutMinimum: min_weth_out, // Minimum expected amount of Token B
+            sqrtPriceLimitX96: 0 // No price limit
         });
 
-        // Realiza el swap de wstETH a WETH y transfiere el resultado al StrategyManager, transfiere la cantidad
-        // al manager, emite evento de depósito y devuelve cantidad WETH retirada. En caso de error revierte
+        // Performs the wstETH to WETH swap and transfers the result to the StrategyManager, transfers the amount
+        // to the manager, emits deposit event and returns the withdrawn WETH amount. Reverts on error
         try uniswap_router.exactInputSingle(params) returns (uint256 weth_out) {
             actual_withdrawn = weth_out;
             IERC20(asset_address).safeTransfer(msg.sender, actual_withdrawn);
@@ -212,25 +212,25 @@ contract LidoStrategy is IStrategy {
     }
 
     /**
-     * @notice No hace nada pero es necesario para implementar la interfaz
-     * @dev Solo puede ser llamado por el StrategyManager
-     * @dev A diferencia de otros protocolos, Lido no emite reward tokens
-     *      El yield ya está embebido en el valor de wstETH y se refleja en totalAssets()
-     * @return profit Siempre 0
+     * @notice Does nothing but is required to implement the interface
+     * @dev Can only be called by the StrategyManager
+     * @dev Unlike other protocols, Lido does not emit reward tokens
+     *      The yield is already embedded in the value of wstETH and is reflected in totalAssets()
+     * @return profit Always 0
      */
     function harvest() external onlyManager returns (uint256 profit) {
         emit Harvested(msg.sender, 0);
         return 0;
     }
 
-    //* Funciones de consulta
+    //* Query functions
 
     /**
-     * @notice Devuelve el total de assets bajo gestión expresado en WETH equivalente
-     * @dev Convierte el balance de wstETH a su equivalente en stETH/ETH usando el exchange rate
-     *      stETH ≈ ETH en valor (soft peg 1:1), por lo que es equivalente al valor en WETH
-     *      El yield se refleja aquí: a medida que sube el exchange rate de wstETH, totalAssets() crece
-     * @return total Valor total en ETH (y por lo tanto WETH) equivalente
+     * @notice Returns the total assets under management expressed in WETH equivalent
+     * @dev Converts the wstETH balance to its stETH/ETH equivalent using the exchange rate
+     *      stETH ≈ ETH in value (soft peg 1:1), so it is equivalent to the value in WETH
+     *      The yield is reflected here: as the wstETH exchange rate rises, totalAssets() grows
+     * @return total Total value in ETH (and therefore WETH) equivalent
      */
     function totalAssets() external view returns (uint256 total) {
         uint256 wsteth_balance = IERC20(address(wst_eth)).balanceOf(address(this));
@@ -238,35 +238,35 @@ contract LidoStrategy is IStrategy {
     }
 
     /**
-     * @notice Devuelve el APY histórico de Lido (hardcodeado)
-     * @dev Lido no expone un oracle de APY on-chain de forma directa El yield real
-     *      se refleja en totalAssets(), no en este valor, pero nos sirve de referencia
-     * @return apy_basis_points APY en basis points (400 = 4%)
+     * @notice Returns the Lido historical APY (hardcoded)
+     * @dev Lido does not expose an on-chain APY oracle directly. The real yield
+     *      is reflected in totalAssets(), not in this value, but it serves as a reference
+     * @return apy_basis_points APY in basis points (400 = 4%)
      */
     function apy() external pure returns (uint256 apy_basis_points) {
         return LIDO_APY;
     }
 
     /**
-     * @notice Devuelve el nombre de la estrategia
-     * @return strategy_name Nombre descriptivo de la estrategia
+     * @notice Returns the strategy name
+     * @return strategy_name Descriptive name of the strategy
      */
     function name() external pure returns (string memory strategy_name) {
         return "Lido wstETH Strategy";
     }
 
     /**
-     * @notice Devuelve la dirección del asset subyacente
-     * @return Dirección de WETH
+     * @notice Returns the address of the underlying asset
+     * @return Address of WETH
      */
     function asset() external view returns (address) {
         return asset_address;
     }
 
     /**
-     * @notice Devuelve el balance de wstETH del contrato
-     * @dev Útil para debugging y comprobaciones off-chain
-     * @return balance Cantidad de wstETH stakeado
+     * @notice Returns the wstETH balance of the contract
+     * @dev Useful for debugging and off-chain checks
+     * @return balance Amount of staked wstETH
      */
     function wstEthBalance() external view returns (uint256 balance) {
         return IERC20(address(wst_eth)).balanceOf(address(this));

@@ -16,111 +16,111 @@ import {ICurvePool} from "../interfaces/strategies/curve/ICurvePool.sol";
 /**
  * @title AaveStrategy
  * @author cristianrisueo
- * @notice Estrategia que deposita wstETH en Aave v3 para generar yield doble (Lido + Aave)
- * @dev Implementa IStrategy para integración con StrategyManager
+ * @notice Strategy that deposits wstETH into Aave v3 to generate double yield (Lido + Aave)
+ * @dev Implements IStrategy for integration with StrategyManager
  *
- * @dev El asset del vault es WETH. La conversión WETH <-> wstETH se realiza de manera interna:
+ * @dev The vault asset is WETH. The WETH <-> wstETH conversion is handled internally:
  *      - Deposit:  WETH → ETH (IWETH) → wstETH (Lido) → Aave
  *      - Withdraw: wstETH (Aave) → stETH (IWstETH) → ETH (Curve swap) → WETH (IWETH)
  *
- * @dev Cuando envías ETH directamente al contrato wstETH, este directamente stakea en Lido,
- *      recibe stETH, lo wrappea, y le devuelve a este contrato wstETH
+ * @dev When you send ETH directly to the wstETH contract, it directly stakes in Lido,
+ *      receives stETH, wraps it, and returns wstETH to this contract
  *
- * @dev Esta estrategia se llama Aave por simplicidad y porque es donde acaba la liquidez
- *      pero combina dos llamadas a protocolos externos:
- *      - Lido staking yield (~4%): capturado via el exchange rate creciente de wstETH
- *      - Aave lending yield (~3.5%): capturado via aWstETH acumulando interés
+ * @dev This strategy is called Aave for simplicity and because that's where the liquidity ends up
+ *      but it combines two calls to external protocols:
+ *      - Lido staking yield (~4%): captured via the growing wstETH exchange rate
+ *      - Aave lending yield (~3.5%): captured via aWstETH accumulating interest
  */
 contract AaveStrategy is IStrategy {
     //* library attachments
 
     /**
-     * @notice Usa SafeERC20 para todas las operaciones de IERC20 de manera segura
-     * @dev Evita errores comunes con tokens legacy o mal implementados
+     * @notice Uses SafeERC20 for all IERC20 operations safely
+     * @dev Avoids common errors with legacy or poorly implemented tokens
      */
     using SafeERC20 for IERC20;
 
-    //* Errores
+    //* Errors
 
     /**
-     * @notice Error cuando el depósito en Aave falla
+     * @notice Error when the Aave deposit fails
      */
     error AaveStrategy__DepositFailed();
 
     /**
-     * @notice Error cuando el retiro de Aave falla
+     * @notice Error when the Aave withdrawal fails
      */
     error AaveStrategy__WithdrawFailed();
 
     /**
-     * @notice Error cuando solo el strategy manager puede llamar
+     * @notice Error when only the strategy manager can call
      */
     error AaveStrategy__OnlyManager();
 
     /**
-     * @notice Error cuando el harvest falla al reclamar rewards
+     * @notice Error when harvest fails while claiming rewards
      */
     error AaveStrategy__HarvestFailed();
 
     /**
-     * @notice Error cuando el swap de rewards a assets falla
+     * @notice Error when the rewards to assets swap fails
      */
     error AaveStrategy__SwapFailed();
 
-    //* Constantes
+    //* Constants
 
-    /// @notice Base para calculos de basis points (10000 = 100%)
+    /// @notice Base for basis points calculations (10000 = 100%)
     uint256 private constant BASIS_POINTS = 10000;
 
-    /// @notice Slippage maximo permitido en swaps en bps (100 = 1%)
+    /// @notice Maximum slippage allowed in swaps in bps (100 = 1%)
     uint256 private constant MAX_SLIPPAGE_BPS = 100;
 
-    //* Variables de estado
+    //* State variables
 
-    /// @notice Direccion del StrategyManager autorizado
+    /// @notice Address of the authorized StrategyManager
     address public immutable manager;
 
-    /// @notice Direccion del asset subyacente del vault (WETH)
+    /// @notice Address of the vault's underlying asset (WETH)
     address private immutable asset_address;
 
-    /// @notice Instancia del Pool de Aave v3
+    /// @notice Instance of the Aave v3 Pool
     IPool private immutable aave_pool;
 
-    /// @notice Instancia del controlador de rewards de Aave v3
+    /// @notice Instance of the Aave v3 rewards controller
     IRewardsController private immutable rewards_controller;
 
-    /// @notice Instancia del aToken que representa los assets depositados en Aave (aWstETH)
+    /// @notice Instance of the aToken representing assets deposited in Aave (aWstETH)
     IAToken private immutable a_token;
 
-    /// @notice Direccion del token de rewards de Aave (token de gobernanza)
+    /// @notice Address of the Aave rewards token (governance token)
     address private immutable reward_token;
 
-    /// @notice Instancia del router de Uniswap v3 para swaps de rewards
+    /// @notice Instance of the Uniswap v3 router for rewards swaps
     ISwapRouter private immutable uniswap_router;
 
-    /// @notice Fee tier de Uniswap v3 para el pool reward/asset (3000 = 0.3%)
+    /// @notice Uniswap v3 fee tier for the reward/asset pool (3000 = 0.3%)
     uint24 private immutable pool_fee;
 
-    /// @notice Instancia del contrato wstETH de Lido para convertir wstETH <-> stETH
+    /// @notice Instance of the Lido wstETH contract to convert wstETH <-> stETH
     IWstETH private immutable wst_eth;
 
-    /// @notice Instancia del contrato WETH para convertir WETH ↔ ETH
+    /// @notice Instance of the WETH contract for converting WETH ↔ ETH
     IWETH private immutable weth;
 
     /**
-     * @notice stETH como ERC20, necesario para pre-aprobar el pool de Curve
-     * @dev stETH se recibe al hacer unwrap() de wstETH. Curve necesita allowance para
-     *      ejecutar el swap stETH→ETH durante el withdrawal
+     * @notice stETH as ERC20, needed to pre-approve the Curve pool
+     * @dev stETH is received when calling unwrap() on wstETH. Curve needs allowance to
+     *      execute the stETH→ETH swap during withdrawal
      */
     IERC20 private immutable st_eth;
 
-    /// @notice Instancia del pool stETH/ETH de Curve para el swap del withdrawal
+    /// @notice Instance of the Curve stETH/ETH pool for the withdrawal swap
     ICurvePool private immutable curve_pool;
 
-    //* Modificadores
+    //* Modifiers
 
     /**
-     * @notice Solo permite llamadas del StrategyManager
+     * @notice Only allows calls from the StrategyManager
      */
     modifier onlyManager() {
         if (msg.sender != manager) revert AaveStrategy__OnlyManager();
@@ -130,19 +130,19 @@ contract AaveStrategy is IStrategy {
     //* Constructor
 
     /**
-     * @notice Constructor de AaveStrategy
-     * @dev Inicializa la estrategia con Aave v3, Lido y Curve. Aprueba los contratos necesarios
-     * @param _manager Direccion del StrategyManager
-     * @param _asset Direccion del asset subyacente del vault (WETH)
-     * @param _aave_pool Direccion del Pool de Aave v3
-     * @param _rewards_controller Direccion del RewardsController de Aave v3
-     * @param _reward_token Direccion del token de rewards (AAVE)
-     * @param _uniswap_router Direccion del SwapRouter de Uniswap v3
-     * @param _pool_fee Fee tier del pool Uniswap para reward/WETH (3000 = 0.3%)
-     * @param _wst_eth Direccion del contrato wstETH de Lido
-     * @param _weth Direccion del contrato WETH
-     * @param _st_eth Direccion del contrato stETH
-     * @param _curve_pool Direccion del pool stETH/ETH de Curve
+     * @notice Constructor of AaveStrategy
+     * @dev Initializes the strategy with Aave v3, Lido and Curve. Approves the required contracts
+     * @param _manager Address of the StrategyManager
+     * @param _asset Address of the vault's underlying asset (WETH)
+     * @param _aave_pool Address of the Aave v3 Pool
+     * @param _rewards_controller Address of the Aave v3 RewardsController
+     * @param _reward_token Address of the rewards token (AAVE)
+     * @param _uniswap_router Address of the Uniswap v3 SwapRouter
+     * @param _pool_fee Fee tier of the Uniswap pool for reward/WETH (3000 = 0.3%)
+     * @param _wst_eth Address of the Lido wstETH contract
+     * @param _weth Address of the WETH contract
+     * @param _st_eth Address of the stETH contract
+     * @param _curve_pool Address of the Curve stETH/ETH pool
      */
     constructor(
         address _manager,
@@ -157,7 +157,7 @@ contract AaveStrategy is IStrategy {
         address _st_eth,
         address _curve_pool
     ) {
-        // Asigna addresses, inicializa contratos y establece el fee tier de UV3
+        // Assigns addresses, initializes contracts and sets the UV3 fee tier
         manager = _manager;
         asset_address = _asset;
         aave_pool = IPool(_aave_pool);
@@ -170,55 +170,55 @@ contract AaveStrategy is IStrategy {
         st_eth = IERC20(_st_eth);
         curve_pool = ICurvePool(_curve_pool);
 
-        // Obtiene la direccion del aToken de wstETH dinamicamente desde Aave
+        // Gets the aToken address for wstETH dynamically from Aave
         address a_token_address = aave_pool.getReserveData(_wst_eth).aTokenAddress;
         a_token = IAToken(a_token_address);
 
-        // Aprueba Aave Pool para mover todo el wstETH de este contrato (para supply)
+        // Approves the Aave Pool to move all wstETH from this contract (for supply)
         IERC20(_wst_eth).forceApprove(_aave_pool, type(uint256).max);
 
-        // Aprueba Uniswap Router para mover todos los reward tokens de Aave (para harvest, swap WETH)
+        // Approves the Uniswap Router to move all Aave reward tokens from this contract (for harvest, swap WETH)
         IERC20(_reward_token).forceApprove(_uniswap_router, type(uint256).max);
 
-        // Aprueba Curve pool para mover todo el stETH (para withdrawal, swap por ETH). No usamos
-        // Uniswap para este swap porque Curve tiene muchísima más liquidez para el par stETH/ETH
+        // Approves the Curve pool to move all stETH (for withdrawal, swap for ETH). We don't use
+        // Uniswap for this swap because Curve has much more liquidity for the stETH/ETH pair
         IERC20(_st_eth).forceApprove(_curve_pool, type(uint256).max);
     }
 
-    //* Funciones especiales
+    //* Special functions
 
     /**
-     * @notice Acepta ETH de WETH.withdraw() (deposit path) y del Curve swap (withdraw path)
-     * @dev WETH.withdraw() envía ETH al caller (este contrato). El pool de Curve también
-     *      envía ETH al caller al hacer exchange(stETH -> ETH). Ambos usan este receive()
+     * @notice Accepts ETH from WETH.withdraw() (deposit path) and from the Curve swap (withdraw path)
+     * @dev WETH.withdraw() sends ETH to the caller (this contract). The Curve pool also
+     *      sends ETH to the caller when doing exchange(stETH -> ETH). Both use this receive()
      */
     receive() external payable {}
 
-    //* Funciones principales
+    //* Main functions
 
     /**
-     * @notice Deposita WETH en Lido, recibe wstETH y lo deposita en Aave v3
-     * @dev Solo puede ser llamado por el StrategyManager
-     * @dev Asume que los assets (WETH) ya fueron transferidos a este contrato por el manager
-     * @param assets Cantidad de WETH a depositar
-     * @return shares Cantidad de WETH depositada
+     * @notice Deposits WETH into Lido, receives wstETH and deposits it into Aave v3
+     * @dev Can only be called by the StrategyManager
+     * @dev Assumes assets (WETH) have already been transferred to this contract by the manager
+     * @param assets Amount of WETH to deposit
+     * @return shares Amount of WETH deposited
      */
     function deposit(uint256 assets) external onlyManager returns (uint256 shares) {
-        // Calcula el balance de wstETH del contrato antes de la operación (debería ser 0)
+        // Calculates the wstETH balance of the contract before the operation (should be 0)
         uint256 wsteth_before = IERC20(address(wst_eth)).balanceOf(address(this));
 
-        // Convierte WETH a ETH. El ETH se recibe en el receive() de este contrato
+        // Converts WETH to ETH. The ETH is received in this contract's receive()
         weth.withdraw(assets);
 
-        // Envía ETH al contrato wstETH. Su receive() lo stakea en Lido y devuelve wstETH
+        // Sends ETH to the wstETH contract. Its receive() stakes it in Lido and returns wstETH
         (bool ok,) = address(wst_eth).call{value: assets}("");
         if (!ok) revert AaveStrategy__DepositFailed();
 
-        // Calcula exactamente cuánto wstETH recibimos de Lido (balance actual - 0)
+        // Calculates exactly how much wstETH we received from Lido (current balance - 0)
         uint256 wsteth_received = IERC20(address(wst_eth)).balanceOf(address(this)) - wsteth_before;
 
-        // Deposita el wstETH recibido en Aave, devuelve las shares (no les da uso, pero necesario para
-        // cumplir con la interfaz) y emite evento. En caso de error revierte
+        // Deposits the received wstETH into Aave, returns shares (not used, but required to
+        // comply with the interface) and emits event. Reverts on error
         try aave_pool.supply(address(wst_eth), wsteth_received, address(this), 0) {
             shares = assets;
             emit Deposited(msg.sender, assets, shares);
@@ -228,34 +228,34 @@ contract AaveStrategy is IStrategy {
     }
 
     /**
-     * @notice Retira assets de Aave v3 y los devuelve en WETH al StrategyManager
-     * @dev Solo puede ser llamado por el StrategyManager
-     * @param assets Cantidad de WETH a retirar
-     * @return actual_withdrawn WETH realmente recibido (puede diferir por slippage)
+     * @notice Withdraws assets from Aave v3 and returns them in WETH to the StrategyManager
+     * @dev Can only be called by the StrategyManager
+     * @param assets Amount of WETH to withdraw
+     * @return actual_withdrawn WETH actually received (may differ due to slippage)
      */
     function withdraw(uint256 assets) external onlyManager returns (uint256 actual_withdrawn) {
-        // Convierte la cantidad de WETH pedida a su equivalente en wstETH stETH ≈ WETH (soft peg 1:1)
+        // Converts the requested WETH amount to its wstETH equivalent. stETH ≈ WETH (soft peg 1:1)
         uint256 wsteth_amount = wst_eth.getWstETHByStETH(assets);
 
-        // Retira wstETH de Aave. En caso de error revierte
+        // Withdraws wstETH from Aave. Reverts on error
         try aave_pool.withdraw(address(wst_eth), wsteth_amount, address(this)) {
-            // Unwrappea de wstETH a stETH
+            // Unwraps wstETH to stETH
             uint256 steth_amount = wst_eth.unwrap(wsteth_amount);
 
-            // Calcula el mínimo ETH esperado del swap en Curve (1% max slippage)
+            // Calculates minimum ETH expected from the Curve swap (1% max slippage)
             uint256 min_eth = (assets * (BASIS_POINTS - MAX_SLIPPAGE_BPS)) / BASIS_POINTS;
 
-            // Swapea stETH (index 1) por ETH (index 0) via Curve pool. El ETH recibido llega al receive()
+            // Swaps stETH (index 1) for ETH (index 0) via Curve pool. The received ETH arrives at receive()
             uint256 eth_received = curve_pool.exchange(1, 0, steth_amount, min_eth);
 
-            // Convierte ETH a WETH
+            // Converts ETH to WETH
             weth.deposit{value: eth_received}();
 
-            // Envía el WETH del contrato (el recibido de Aave al retirar) al manager
+            // Sends the contract's WETH (received from Aave on withdrawal) to the manager
             actual_withdrawn = eth_received;
             IERC20(asset_address).safeTransfer(msg.sender, actual_withdrawn);
 
-            // Emite evento y devuelve la cantidad real retirada (debería diferir 1% máx)
+            // Emits event and returns the actual withdrawn amount (should differ by 1% max)
             emit Withdrawn(msg.sender, actual_withdrawn, assets);
         } catch {
             revert AaveStrategy__WithdrawFailed();
@@ -263,57 +263,57 @@ contract AaveStrategy is IStrategy {
     }
 
     /**
-     * @notice Cosecha rewards de Aave, los swapea a WETH y reinvierte como wstETH en Aave
-     * @dev Solo puede ser llamado por el StrategyManager
-     * @dev Flujo: reclama AAVE reward tokens → swap a WETH vía Uniswap → ETH → wstETH → Aave
-     * @return profit Cantidad de WETH equivalente obtenido tras swap y reinversión de rewards
+     * @notice Harvests Aave rewards, swaps them to WETH and reinvests as wstETH in Aave
+     * @dev Can only be called by the StrategyManager
+     * @dev Flow: claim AAVE reward tokens → swap to WETH via Uniswap → ETH → wstETH → Aave
+     * @return profit Amount of WETH equivalent obtained after swap and reinvestment of rewards
      */
     function harvest() external onlyManager returns (uint256 profit) {
-        // Construye array de aTokens (aWstETH) para reclamar los rewards de Aave
+        // Builds array of aTokens (aWstETH) to claim Aave rewards
         address[] memory assets_to_claim = new address[](1);
         assets_to_claim[0] = address(a_token);
 
-        // Reclama los rewards acumulados para el aToken en Aave. En caso de error revierte
+        // Claims accumulated rewards for the aToken in Aave. Reverts on error
         try rewards_controller.claimAllRewards(assets_to_claim, address(this)) returns (
             address[] memory, uint256[] memory claimed_amounts
         ) {
-            // Si no hay rewards que reclamar, retorna 0
+            // If there are no rewards to claim, return 0
             if (claimed_amounts.length == 0 || claimed_amounts[0] == 0) {
                 return 0;
             }
 
-            // En caso de que si haya rewards a reclamar calcula el min amount esperado en el swap
+            // If there are rewards to claim, calculates the minimum expected amount in the swap
             uint256 min_amount_out = (claimed_amounts[0] * (BASIS_POINTS - MAX_SLIPPAGE_BPS)) / BASIS_POINTS;
 
-            // Crea los parámetros de llamada al pool de Uniswap V3 para hacer el swap reward -> WETH
+            // Creates the Uniswap V3 pool call parameters to swap reward -> WETH
             ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
                 tokenIn: reward_token, // Token A (reward token)
                 tokenOut: asset_address, // Token B (WETH)
                 fee: pool_fee, // Fee tier
-                recipient: address(this), // Address que recibe el swap (este contrato)
-                deadline: block.timestamp, // A ejecutar en este bloque
-                amountIn: claimed_amounts[0], // Cantidad del token A a swapear
-                amountOutMinimum: min_amount_out, // Mínima cantidad esperada del Token B
-                sqrtPriceLimitX96: 0 // Sin límite de precio
+                recipient: address(this), // Address receiving the swap (this contract)
+                deadline: block.timestamp, // To be executed in this block
+                amountIn: claimed_amounts[0], // Amount of token A to swap
+                amountOutMinimum: min_amount_out, // Minimum expected amount of Token B
+                sqrtPriceLimitX96: 0 // No price limit
             });
 
-            // Realiza el swap aToken → WETH. Si funciona, reinvierte como wstETH en Aave. Si error, revierte
+            // Performs the aToken → WETH swap. If successful, reinvests as wstETH in Aave. Reverts on error
             try uniswap_router.exactInputSingle(params) returns (uint256 weth_out) {
-                // Calcula balance de wstETH antes del wrap (debería ser 0)
+                // Calculates wstETH balance before wrap (should be 0)
                 uint256 wsteth_before = IERC20(address(wst_eth)).balanceOf(address(this));
 
-                // Convierte WETH → ETH → wstETH (mismo flujo que en deposit)
+                // Converts WETH → ETH → wstETH (same flow as in deposit)
                 weth.withdraw(weth_out);
 
                 (bool ok,) = address(wst_eth).call{value: weth_out}("");
                 if (!ok) revert AaveStrategy__SwapFailed();
 
-                // Reinvierte el wstETH recibido en Aave
+                // Reinvests the received wstETH in Aave
                 uint256 wsteth_received = IERC20(address(wst_eth)).balanceOf(address(this)) - wsteth_before;
                 aave_pool.supply(address(wst_eth), wsteth_received, address(this), 0);
 
-                // Devuelve el beneficio en equivalente a WETH (menos mal que todos los tokens son derivados de
-                // ETH que si no estaríamos muy jodidos para el accounting) y emite el evento
+                // Returns the profit in WETH equivalent (lucky that all tokens are ETH derivatives,
+                // otherwise accounting would be a fucking nightmare) and emits the event
                 profit = weth_out;
                 emit Harvested(msg.sender, profit);
             } catch {
@@ -324,15 +324,15 @@ contract AaveStrategy is IStrategy {
         }
     }
 
-    //* Funciones de consulta
+    //* Query functions
 
     /**
-     * @notice Devuelve el total de assets bajo gestión en WETH equivalente
-     * @dev El balance de aWstETH es 1:1 con wstETH. Se convierte a WETH equivalente
-     *      usando getStETHByWstETH() que aplica el exchange rate actual de Lido.
-     *      stETH ≈ ETH ≈ WETH en valor, por lo que este retorno es el valor en WETH.
-     *      El yield doble (Lido + Aave) se refleja aquí a medida que crecen ambos rates.
-     * @return total Valor total en WETH equivalente
+     * @notice Returns the total assets under management in WETH equivalent
+     * @dev The aWstETH balance is 1:1 with wstETH. Converted to WETH equivalent
+     *      using getStETHByWstETH() which applies the current Lido exchange rate.
+     *      stETH ≈ ETH ≈ WETH in value, so this return is the value in WETH.
+     *      The double yield (Lido + Aave) is reflected here as both rates grow.
+     * @return total Total value in WETH equivalent
      */
     function totalAssets() external view returns (uint256 total) {
         uint256 awsteth_balance = a_token.balanceOf(address(this));
@@ -340,70 +340,70 @@ contract AaveStrategy is IStrategy {
     }
 
     /**
-     * @notice Devuelve el APY actual de Aave para wstETH
+     * @notice Returns the current Aave APY for wstETH
      *
-     * @dev Convierte de RAY (1e27, unidad interna de Aave) a basis points (1e4)
+     * @dev Converts from RAY (1e27, Aave's internal unit) to basis points (1e4)
      *      RAY / 1e23 = basis points
      *
-     * @dev Nota: este APY refleja solo el lending yield de Aave (~3.5%).
-     *      El Lido staking yield (~4%) está embebido en el exchange rate creciente
-     *      de wstETH y se refleja en totalAssets(), no en este valor.
+     * @dev Note: this APY reflects only the Aave lending yield (~3.5%).
+     *      The Lido staking yield (~4%) is embedded in the growing wstETH exchange rate
+     *      and is reflected in totalAssets(), not in this value.
      *
-     * @return apy_basis_points APY de lending en Aave en basis points (350 = 3.5%)
+     * @return apy_basis_points Aave lending APY in basis points (350 = 3.5%)
      */
     function apy() external view returns (uint256 apy_basis_points) {
-        // Obtiene los datos de las reservas de wstETH en Aave (no WETH)
+        // Gets the reserve data for wstETH in Aave (not WETH)
         DataTypes.ReserveData memory reserve_data = aave_pool.getReserveData(address(wst_eth));
         uint256 liquidity_rate = reserve_data.currentLiquidityRate;
 
-        // Devuelve el APY (liquidity rate) casteado a basis points
+        // Returns the APY (liquidity rate) cast to basis points
         apy_basis_points = liquidity_rate / 1e23;
     }
 
     /**
-     * @notice Devuelve el nombre de la estrategia
-     * @return strategy_name Nombre descriptivo de la estrategia
+     * @notice Returns the strategy name
+     * @return strategy_name Descriptive name of the strategy
      */
     function name() external pure returns (string memory strategy_name) {
         return "Aave v3 wstETH Strategy";
     }
 
     /**
-     * @notice Devuelve el address del asset del vault (WETH)
-     * @return asset_address Direccion del asset subyacente (WETH)
+     * @notice Returns the vault asset address (WETH)
+     * @return asset_address Address of the underlying asset (WETH)
      */
     function asset() external view returns (address) {
         return asset_address;
     }
 
     /**
-     * @notice Devuelve la liquidez disponible de wstETH en Aave para withdraws
-     * @dev Util para comprobar si hay suficiente liquidez antes de retirar
-     * @return available Cantidad de wstETH disponible en Aave
+     * @notice Returns the available wstETH liquidity in Aave for withdrawals
+     * @dev Useful for checking if there is enough liquidity before withdrawing
+     * @return available Amount of wstETH available in Aave
      */
     function availableLiquidity() external view returns (uint256 available) {
         return IERC20(address(wst_eth)).balanceOf(address(a_token));
     }
 
     /**
-     * @notice Devuelve el balance de aToken (aWstETH) de este contrato
-     * @return balance Cantidad de aWstETH que posee el contrato
+     * @notice Returns the aToken (aWstETH) balance of this contract
+     * @return balance Amount of aWstETH held by the contract
      */
     function aTokenBalance() external view returns (uint256 balance) {
         return a_token.balanceOf(address(this));
     }
 
     /**
-     * @notice Devuelve los rewards pendientes de reclamar en Aave
-     * @dev Util para estimar profit del harvest antes de ejecutarlo
-     * @return pending Cantidad de rewards (AAVE) pendientes
+     * @notice Returns pending rewards to claim in Aave
+     * @dev Useful for estimating harvest profit before executing it
+     * @return pending Amount of pending rewards (AAVE)
      */
     function pendingRewards() external view returns (uint256 pending) {
-        // Crea un array con el address del aToken (Aave lo necesita en un array)
+        // Creates an array with the aToken address (Aave requires it in an array)
         address[] memory assets_to_check = new address[](1);
         assets_to_check[0] = address(a_token);
 
-        // Realiza la llamada a Aave para obtener el balance de los rewards de este contrato
+        // Makes the Aave call to get the rewards balance for this contract
         return rewards_controller.getUserRewards(assets_to_check, address(this), reward_token);
     }
 }

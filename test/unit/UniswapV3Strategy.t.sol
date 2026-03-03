@@ -10,37 +10,37 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 /**
  * @title UniswapV3StrategyTest
  * @author cristianrisueo
- * @notice Tests unitarios para UniswapV3Strategy con fork de Mainnet
- * @dev Fork test real contra Uniswap V3 WETH/USDC pool — valida deposits, withdrawals y harvest
+ * @notice Unit tests for UniswapV3Strategy with Mainnet fork
+ * @dev Real fork test against Uniswap V3 WETH/USDC pool — validates deposits, withdrawals and harvest
  */
 contract UniswapV3StrategyTest is Test {
     //* Variables de estado
 
-    /// @notice Instancia de la estrategia y manager
+    /// @notice Strategy and manager instances
     UniswapV3Strategy public strategy;
     StrategyManager public manager;
 
-    /// @notice Direcciones de los contratos en Mainnet
+    /// @notice Mainnet contract addresses
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
     address constant UNI_POS_MGR = 0xC36442b4a4522E871399CD717aBDD847Ab11FE88;
     address constant UNI_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
     address constant WETH_USDC_POOL = 0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640;
 
-    /// @notice Usuario de prueba
+    /// @notice Test user
     address public alice = makeAddr("alice");
 
-    //* Setup del entorno de testing
+    //* Testing environment setup
 
     /**
-     * @notice Configura el entorno de testing
-     * @dev Fork de Mainnet para interactuar con Uniswap V3 WETH/USDC pool real
+     * @notice Configures the testing environment
+     * @dev Mainnet fork to interact with real Uniswap V3 WETH/USDC pool
      */
     function setUp() public {
-        // Crea un fork de Mainnet usando el endpoint de Alchemy
+        // Creates a Mainnet fork using the Alchemy endpoint
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Inicializa manager con parámetros del tier Balanced
+        // Initializes manager with Balanced tier parameters
         manager = new StrategyManager(
             WETH,
             IStrategyManager.TierConfig({
@@ -51,7 +51,7 @@ contract UniswapV3StrategyTest is Test {
             })
         );
 
-        // Inicializa la estrategia con el pool WETH/USDC 0.05%
+        // Initializes the strategy with the WETH/USDC 0.05% pool
         strategy = new UniswapV3Strategy(
             address(manager),
             UNI_POS_MGR,
@@ -62,69 +62,69 @@ contract UniswapV3StrategyTest is Test {
         );
     }
 
-    //* Funciones internas helpers
+    //* Internal helper functions
 
     /**
-     * @notice Helper para depositar en la estrategia como manager
-     * @param amount Cantidad a depositar
+     * @notice Helper to deposit into the strategy as manager
+     * @param amount Amount to deposit
      */
     function _deposit(uint256 amount) internal {
-        // Da WETH a la estrategia y deposita como manager
+        // Gives WETH to the strategy and deposits as manager
         deal(WETH, address(strategy), amount);
         vm.prank(address(manager));
         strategy.deposit(amount);
     }
 
     /**
-     * @notice Helper para retirar de la estrategia como manager
-     * @param amount Cantidad a retirar
+     * @notice Helper to withdraw from the strategy as manager
+     * @param amount Amount to withdraw
      */
     function _withdraw(uint256 amount) internal {
         vm.prank(address(manager));
         strategy.withdraw(amount);
     }
 
-    //* Testing de deposit
+    //* Deposit tests
 
     /**
-     * @notice Test de depósito básico en Uniswap V3
-     * @dev Comprueba que WETH se convierte en posición LP NFT y totalAssets lo refleje
+     * @notice Basic Uniswap V3 deposit test
+     * @dev Checks that WETH is converted into an LP NFT position and totalAssets reflects it
      */
     function test_Deposit_Basic() public {
-        // Deposita en Uniswap V3 (50% swap WETH→USDC + mint position NFT)
+        // Deposits in Uniswap V3 (50% swap WETH→USDC + mint position NFT)
         _deposit(10 ether);
 
-        // Comprueba que se creó una posición (token_id != 0)
-        assertGt(strategy.token_id(), 0, "Debe haberse creado un NFT de posicion");
+        // Checks that a position was created (token_id != 0)
+        assertGt(strategy.token_id(), 0, "An NFT position should have been created");
 
-        // Comprueba que totalAssets refleje el depósito con tolerancia del 5%
-        // (por el swap 50% + slippage + concentración del rango)
+        // Checks that totalAssets reflects the deposit with 5% tolerance
+        // (for the 50% swap + slippage + range concentration)
         assertApproxEqRel(strategy.totalAssets(), 10 ether, 0.05e18);
     }
 
     /**
-     * @notice Test de múltiples depósitos aumentan la posición existente
-     * @dev El segundo depósito debe aumentar la liquidez del NFT existente
+     * @notice Multiple deposits increase the existing position test
+     * @dev The second deposit must increase the liquidity of the existing NFT
      */
     function test_Deposit_IncreasesExistingPosition() public {
-        // Primer depósito crea la posición
+        // First deposit creates the position
         _deposit(10 ether);
         uint256 token_id_first = strategy.token_id();
         uint256 assets_after_first = strategy.totalAssets();
 
-        // Segundo depósito incrementa la posición existente
+        // Second deposit increases the existing position
         _deposit(10 ether);
 
-        // El token_id debe ser el mismo (se reutiliza el NFT)
-        assertEq(strategy.token_id(), token_id_first, "El token_id no debe cambiar en deposits sucesivos");
+        // token_id must be the same (NFT is reused)
+        assertEq(strategy.token_id(), token_id_first, "The token_id must not change on successive deposits");
 
-        // totalAssets debe haber aumentado aproximadamente en el segundo depósito
-        assertGt(strategy.totalAssets(), assets_after_first, "totalAssets debe crecer con el segundo deposito");
+        // totalAssets must have increased approximately by the second deposit
+        assertGt(strategy.totalAssets(), assets_after_first, "totalAssets should grow with the second deposit");
     }
 
     /**
-     * @notice Test de depósito solo desde manager
-     * @dev Comprueba que solo el manager pueda depositar
+     * @notice Deposit only from manager test
+     * @dev Checks that only the manager can deposit
      */
     function test_Deposit_RevertIfNotManager() public {
         deal(WETH, address(strategy), 10 ether);
@@ -135,8 +135,8 @@ contract UniswapV3StrategyTest is Test {
     }
 
     /**
-     * @notice Test de depósito de cantidad cero
-     * @dev Comprueba que revierta con cantidad cero
+     * @notice Zero amount deposit test
+     * @dev Checks it reverts with zero amount
      */
     function test_Deposit_RevertZeroAmount() public {
         vm.prank(address(manager));
@@ -144,43 +144,43 @@ contract UniswapV3StrategyTest is Test {
         strategy.deposit(0);
     }
 
-    //* Testing de withdraw
+    //* Withdraw tests
 
     /**
-     * @notice Test de retiro básico de Uniswap V3
-     * @dev Comprueba que decreaseLiquidity → collect → swap USDC→WETH → manager
+     * @notice Basic Uniswap V3 withdrawal test
+     * @dev Checks that decreaseLiquidity → collect → swap USDC→WETH → manager
      */
     function test_Withdraw_Basic() public {
-        // Deposita primero
+        // Deposits first
         _deposit(10 ether);
 
-        // Retira la mitad (tolerancia 5% por slippage en swap USDC→WETH)
+        // Withdraws half (5% tolerance for slippage in USDC→WETH swap)
         _withdraw(5 ether);
 
-        // Comprueba que el manager recibió los fondos
+        // Checks that the manager received the funds
         assertApproxEqRel(IERC20(WETH).balanceOf(address(manager)), 5 ether, 0.05e18);
     }
 
     /**
-     * @notice Test de retiro total quema el NFT
-     * @dev Cuando la posición queda vacía, el NFT debe ser quemado y token_id = 0
+     * @notice Full withdrawal burns the NFT test
+     * @dev When the position is left empty, the NFT must be burned and token_id = 0
      */
     function test_Withdraw_Full_BurnsNFT() public {
-        // Deposita
+        // Deposits
         _deposit(10 ether);
-        assertGt(strategy.token_id(), 0, "Debe haber un NFT");
+        assertGt(strategy.token_id(), 0, "Should have an NFT");
 
-        // Retira todo
+        // Withdraws everything
         uint256 total = strategy.totalAssets();
         _withdraw(total);
 
-        // El NFT debe haber sido quemado
-        assertEq(strategy.token_id(), 0, "El NFT debe estar quemado tras retiro total");
+        // The NFT must have been burned
+        assertEq(strategy.token_id(), 0, "The NFT must be burned after full withdrawal");
     }
 
     /**
-     * @notice Test de retiro solo desde manager
-     * @dev Comprueba que solo el manager pueda retirar
+     * @notice Withdraw only from manager test
+     * @dev Checks that only the manager can withdraw
      */
     function test_Withdraw_RevertIfNotManager() public {
         _deposit(10 ether);
@@ -191,8 +191,8 @@ contract UniswapV3StrategyTest is Test {
     }
 
     /**
-     * @notice Test de retiro de cantidad cero
-     * @dev Comprueba que revierta con cantidad cero
+     * @notice Zero amount withdrawal test
+     * @dev Checks it reverts with zero amount
      */
     function test_Withdraw_RevertZeroAmount() public {
         vm.prank(address(manager));
@@ -201,8 +201,8 @@ contract UniswapV3StrategyTest is Test {
     }
 
     /**
-     * @notice Test de retiro sin posición
-     * @dev Comprueba que revierta si no hay posición (token_id == 0)
+     * @notice Withdraw without position test
+     * @dev Checks it reverts if there is no position (token_id == 0)
      */
     function test_Withdraw_RevertNoPosition() public {
         vm.prank(address(manager));
@@ -210,31 +210,31 @@ contract UniswapV3StrategyTest is Test {
         strategy.withdraw(1 ether);
     }
 
-    //* Testing de harvest
+    //* Harvest tests
 
     /**
-     * @notice Test de harvest colecta fees acumuladas
-     * @dev Tras tiempo de actividad en el pool, collect recoge fees en ambos tokens
+     * @notice Harvest collects accumulated fees test
+     * @dev After pool activity time, collect gathers fees in both tokens
      */
     function test_Harvest_CollectsFees() public {
-        // Deposita fondos para tener una posición activa
+        // Deposits funds to have an active position
         _deposit(100 ether);
 
-        // Avanza tiempo para acumular fees (simulando volumen)
+        // Advances time to accumulate fees (simulating volume)
         skip(7 days);
         vm.roll(block.number + 50400);
 
-        // Harvest no debe revertir
+        // Harvest must not revert
         vm.prank(address(manager));
         strategy.harvest();
 
-        // La posición debe seguir activa (token_id aún existe o fue reinvertido)
-        // No verificamos profit exacto ya que depende del volumen real del pool
+        // The position must still be active (token_id still exists or was reinvested)
+        // We don't verify exact profit since it depends on real pool volume
     }
 
     /**
-     * @notice Test de harvest solo desde manager
-     * @dev Comprueba que solo el manager pueda llamar harvest
+     * @notice Harvest only from manager test
+     * @dev Checks that only the manager can call harvest
      */
     function test_Harvest_RevertIfNotManager() public {
         vm.prank(alice);
@@ -242,38 +242,38 @@ contract UniswapV3StrategyTest is Test {
         strategy.harvest();
     }
 
-    //* Testing de funciones de consulta
+    //* Query function tests
 
     /**
-     * @notice Test de APY
-     * @dev Comprueba que el APY sea el valor hardcodeado (1400 bps = 14%)
+     * @notice APY test
+     * @dev Checks that APY is the hardcoded value (1400 bps = 14%)
      */
     function test_Apy_ReturnsValidValue() public view {
         uint256 apy = strategy.apy();
 
-        // El APY de Uniswap V3 está hardcodeado en 1400 bps (14%)
+        // Uniswap V3 APY is hardcoded at 1400 bps (14%)
         assertEq(apy, 1400);
     }
 
     /**
-     * @notice Test de nombre de la estrategia
-     * @dev Comprueba que devuelva el nombre correcto
+     * @notice Strategy name test
+     * @dev Checks that it returns the correct name
      */
     function test_Name() public view {
         assertEq(strategy.name(), "Uniswap V3 WETH/USDC Strategy");
     }
 
     /**
-     * @notice Test de asset
-     * @dev Comprueba que devuelva la dirección de WETH
+     * @notice Asset test
+     * @dev Checks that it returns the WETH address
      */
     function test_Asset() public view {
         assertEq(strategy.asset(), WETH);
     }
 
     /**
-     * @notice Test de totalAssets sin posición
-     * @dev Comprueba que devuelva 0 cuando no hay posición (token_id == 0)
+     * @notice totalAssets without position test
+     * @dev Checks that it returns 0 when there is no position (token_id == 0)
      */
     function test_TotalAssets_ZeroWithoutDeposits() public view {
         assertEq(strategy.totalAssets(), 0);
@@ -281,8 +281,8 @@ contract UniswapV3StrategyTest is Test {
     }
 
     /**
-     * @notice Test de ticks de la posición
-     * @dev Comprueba que los ticks estén configurados correctamente (lower < upper)
+     * @notice Position ticks test
+     * @dev Checks that ticks are configured correctly (lower < upper)
      */
     function test_Ticks_AreValid() public view {
         assertLt(strategy.lower_tick(), strategy.upper_tick(), "lower_tick debe ser menor que upper_tick");

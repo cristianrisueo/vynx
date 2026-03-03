@@ -16,21 +16,21 @@ import {IWETH} from "@aave/contracts/misc/interfaces/IWETH.sol";
 /**
  * @title FuzzTest
  * @author cristianrisueo
- * @notice Fuzz tests stateless para el protocolo
- * @dev Cada test recibe inputs aleatorios acotados a rangos realistas
- *      Son stateless: cada ejecución empieza de cero tras setUp()
+ * @notice Stateless fuzz tests for the protocol
+ * @dev Each test receives random inputs bounded to realistic ranges
+ *      They are stateless: each execution starts from scratch after setUp()
  */
 contract FuzzTest is Test {
     //* Variables de estado
 
-    /// @notice Instancias del protocolo: Vault, manager y estrategias
+    /// @notice Protocol instances: Vault, manager and strategies
     Vault public vault;
     StrategyManager public manager;
     AaveStrategy public aave_strategy;
     LidoStrategy public lido_strategy;
     Router public router;
 
-    /// @notice Direcciones de los contratos en Mainnet
+    /// @notice Mainnet contract addresses
     address constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address constant WSTETH = 0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0;
     address constant STETH = 0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84;
@@ -43,28 +43,28 @@ contract FuzzTest is Test {
     address constant CURVE_POOL = 0xDC24316b9AE028F1497c275EB9192a3Ea0f67022;
     uint24 constant POOL_FEE = 3000;
 
-    /// @notice Usuarios de prueba
+    /// @notice Test users
     address public alice = makeAddr("alice");
     address public founder;
 
-    /// @notice Parámetros del vault
+    /// @notice Vault parameters
     uint256 constant MAX_TVL = 1000 ether;
     uint256 constant MIN_DEPOSIT = 0.01 ether;
 
-    //* Setup del entorno de testing
+    //* Testing environment setup
 
     /**
-     * @notice Configura el entorno de testing
-     * @dev Fork de Mainnet con protocolo completo desplegado
+     * @notice Configures the testing environment
+     * @dev Mainnet fork with complete protocol deployed
      */
     function setUp() public {
-        // Crea un fork de Mainnet usando el endpoint de Alchemy
+        // Creates a Mainnet fork using the Alchemy endpoint
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
 
-        // Setea el founder
+        // Sets the founder
         founder = makeAddr("founder");
 
-        // Despliega y conecta vault y manager con parámetros del tier Balanced
+        // Deploys and connects vault and manager with Balanced tier parameters
         manager = new StrategyManager(
             WETH,
             IStrategyManager.TierConfig({
@@ -88,7 +88,7 @@ contract FuzzTest is Test {
         );
         manager.initialize(address(vault));
 
-        // Despliega estrategias con direcciones reales de Mainnet
+        // Deploys strategies with real Mainnet addresses
         aave_strategy = new AaveStrategy(
             address(manager),
             WETH,
@@ -104,15 +104,15 @@ contract FuzzTest is Test {
         );
         lido_strategy = new LidoStrategy(address(manager), WSTETH, WETH, UNISWAP_ROUTER, uint24(500));
 
-        // Mock Aave APY para que allocation funcione y Lido APY a 0 para evitar slippage en withdrawals
+        // Mock Aave APY so allocation works and Lido APY to 0 to avoid slippage on withdrawals
         vm.mockCall(address(aave_strategy), abi.encodeWithSignature("apy()"), abi.encode(uint256(300)));
         vm.mockCall(address(lido_strategy), abi.encodeWithSignature("apy()"), abi.encode(uint256(50)));
 
-        // Conecta estrategias al manager
+        // Connects strategies to the manager
         manager.addStrategy(address(aave_strategy));
         manager.addStrategy(address(lido_strategy));
 
-        // Despliega Router
+        // Deploys Router
         router = new Router(WETH, address(vault), UNISWAP_ROUTER);
 
         // Seed pool wstETH/WETH
@@ -143,140 +143,140 @@ contract FuzzTest is Test {
 
     receive() external payable {}
 
-    //* Funciones internas helpers
+    //* Internal helper functions
 
     /**
-     * @notice Helper de depósito
-     * @param user Usuario que deposita
-     * @param amount Cantidad a depositar
-     * @return shares Shares minteadas
+     * @notice Deposit helper
+     * @param user User depositing
+     * @param amount Amount to deposit
+     * @return shares Minted shares
      */
     function _deposit(address user, uint256 amount) internal returns (uint256 shares) {
-        // Entrega la cantidad de WETH al usuario y usa su address
+        // Gives the user the WETH amount and uses their address
         deal(WETH, user, amount);
         vm.startPrank(user);
 
-        // Aprueba al vault la transferencia de WETH y deposita la cantidad en el vault
+        // Approves the vault for the WETH transfer and deposits the amount into the vault
         IERC20(WETH).approve(address(vault), amount);
         shares = vault.deposit(amount, user);
 
         vm.stopPrank();
     }
 
-    //* Fuzz tests stateless
+    //* Stateless fuzz tests
 
     /**
-     * @notice Fuzz: Para cualquier amount válido, deposit genera shares > 0 y totalAssets crece
-     * @dev Acota amount entre MIN_DEPOSIT y MAX_TVL para evitar reverts por validación
-     * @param amount Cantidad aleatoria generada por el fuzzer
+     * @notice Fuzz: For any valid amount, deposit generates shares > 0 and totalAssets grows
+     * @dev Bounds amount between MIN_DEPOSIT and MAX_TVL to avoid validation reverts
+     * @param amount Random amount generated by the fuzzer
      */
     function testFuzz_Deposit_GeneratesShares(uint256 amount) public {
-        // Acota el input al rango válido del vault
+        // Bounds input to the vault's valid range
         amount = bound(amount, MIN_DEPOSIT, MAX_TVL);
 
-        // Guarda totalAssets antes del depósito
+        // Saves totalAssets before the deposit
         uint256 total_before = vault.totalAssets();
 
-        // Deposita y comprueba que se generaron shares
+        // Deposits and checks that shares were generated
         uint256 shares = _deposit(alice, amount);
-        assertGt(shares, 0, "Deposit deberia generar shares > 0");
+        assertGt(shares, 0, "Deposit should generate shares > 0");
 
-        // Comprueba que totalAssets creció (tolerancia 0.1% por fees de protocolos)
-        assertApproxEqRel(vault.totalAssets(), total_before + amount, 0.001e18, "TotalAssets no crecio");
+        // Checks that totalAssets grew (0.1% tolerance for protocol fees)
+        assertApproxEqRel(vault.totalAssets(), total_before + amount, 0.001e18, "TotalAssets did not grow");
     }
 
     /**
-     * @notice Fuzz: Para cualquier withdraw, el usuario no extrae más de lo depositado
-     * @dev Deposita amount, luego retira un porcentaje aleatorio, siempre <= depositado
-     * @param amount Cantidad aleatoria depositada
-     * @param withdraw_pct Porcentaje aleatorio a retirar (1-90%) de lo depositado
+     * @notice Fuzz: For any withdrawal, the user does not extract more than deposited
+     * @dev Deposits amount, then withdraws a random percentage, always <= deposited
+     * @param amount Random deposited amount
+     * @param withdraw_pct Random percentage to withdraw (1-90%) of deposited
      */
     function testFuzz_Withdraw_NeverExceedsDeposit(uint256 amount, uint256 withdraw_pct) public {
-        // Acota inputs: amount válido, withdraw entre 1% y 90% del depósito
+        // Bounds inputs: valid amount, withdraw between 1% and 90% of deposit
         amount = bound(amount, MIN_DEPOSIT, MAX_TVL);
         withdraw_pct = bound(withdraw_pct, 1, 90);
 
-        // Deposita
+        // Deposits
         _deposit(alice, amount);
 
-        // Calcula la cantidad neta a retirar (porcentaje del depósito)
+        // Calculates the net amount to withdraw (percentage of deposit)
         uint256 withdraw_amount = (amount * withdraw_pct) / 100;
         if (withdraw_amount == 0) return;
 
-        // Top-up vault para cubrir slippage de swaps en estrategias
+        // Top-up vault to cover swap slippage in strategies
         deal(WETH, address(vault), IERC20(WETH).balanceOf(address(vault)) + withdraw_amount);
-        // Retira
+        // Withdraws
         vm.prank(alice);
         vault.withdraw(withdraw_amount, alice, alice);
 
-        // Comprueba que lo recibido no exceda lo depositado
-        // Este test me parece un poco trucado (un 90% máximo deja un buffer muy alto, y si recibe un 91%?)
-        assertLe(IERC20(WETH).balanceOf(alice), amount, "Usuario recibio mas de lo depositado");
+        // Checks that received amount does not exceed deposited amount
+        // This test feels a bit rigged (a 90% max leaves a very high buffer, what if it receives 91%?)
+        assertLe(IERC20(WETH).balanceOf(alice), amount, "User received more than deposited");
     }
 
     /**
-     * @notice Fuzz: Redeem quema exactamente las shares indicadas
-     * @dev Para cualquier cantidad de shares redimidas, el balance de shares decrece exactamente esa cantidad
-     * @param amount Cantidad aleatoria depositada
-     * @param redeem_pct Porcentaje aleatorio de shares a redimir
+     * @notice Fuzz: Redeem burns exactly the indicated shares
+     * @dev For any amount of redeemed shares, the share balance decreases by exactly that amount
+     * @param amount Random deposited amount
+     * @param redeem_pct Random percentage of shares to redeem
      */
     function testFuzz_Redeem_BurnsExactShares(uint256 amount, uint256 redeem_pct) public {
-        // Acota inputs
+        // Bounds inputs
         amount = bound(amount, MIN_DEPOSIT, MAX_TVL);
         redeem_pct = bound(redeem_pct, 1, 100);
 
-        // Deposita y obtiene shares
+        // Deposits and gets shares
         uint256 shares = _deposit(alice, amount);
 
-        // Calcula shares a redimir (entre un 1% y un 100%)
+        // Calculates shares to redeem (between 1% and 100%)
         uint256 shares_to_redeem = (shares * redeem_pct) / 100;
         if (shares_to_redeem == 0) return;
 
-        // Guarda balance de shares antes
+        // Saves shares balance before
         uint256 shares_before = vault.balanceOf(alice);
 
-        // Top-up vault para cubrir slippage de swaps en estrategias
+        // Top-up vault to cover swap slippage in strategies
         uint256 assets_to_redeem = vault.convertToAssets(shares_to_redeem);
         deal(WETH, address(vault), IERC20(WETH).balanceOf(address(vault)) + assets_to_redeem);
-        // Redime las shares calculadas
+        // Redeems the calculated shares
         vm.prank(alice);
         vault.redeem(shares_to_redeem, alice, alice);
 
-        // Comprueba que se quemaron exactamente las shares indicadas
+        // Checks that exactly the indicated shares were burned
         uint256 shares_after = vault.balanceOf(alice);
-        assertEq(shares_before - shares_after, shares_to_redeem, "No se quemaron las shares exactas");
+        assertEq(shares_before - shares_after, shares_to_redeem, "Exact shares were not burned");
     }
 
     /**
-     * @notice Fuzz: Deposit → Redeem inmediato nunca genera profit
-     * @dev Un usuario no puede ganar depositando y retirando inmediatamente
-     *      Para cualquier amount, assets_out <= amount (por posible pérdida de redondeo)
-     * @param amount Cantidad aleatoria depositada
+     * @notice Fuzz: Deposit → Immediate redeem never generates profit
+     * @dev A user cannot profit by depositing and withdrawing immediately
+     *      For any amount, assets_out <= amount (due to possible rounding loss)
+     * @param amount Random deposited amount
      */
     function testFuzz_DepositRedeem_NeverProfitable(uint256 amount) public {
-        // Acota al rango válido del protocolo
+        // Bounds to the protocol's valid range
         amount = bound(amount, MIN_DEPOSIT, MAX_TVL);
 
-        // Deposita y redime todo inmediatamente
+        // Deposits and redeems everything immediately
         uint256 shares = _deposit(alice, amount);
 
-        // Top-up vault para cubrir slippage de swaps en estrategias
+        // Top-up vault to cover swap slippage in strategies
         uint256 assets_est = vault.convertToAssets(shares);
         deal(WETH, address(vault), IERC20(WETH).balanceOf(address(vault)) + assets_est);
         vm.prank(alice);
         uint256 assets_out = vault.redeem(shares, alice, alice);
 
-        // Lo recibido nunca excede lo depositado (puede haber pérdida por redondeo)
-        assertLe(assets_out, amount, "Deposit-redeem no deberia ser profitable");
+        // Amount received never exceeds deposited (there may be rounding loss)
+        assertLe(assets_out, amount, "Deposit-redeem should not be profitable");
     }
 
     //* === Router Fuzz Tests ===
 
     /**
-     * @notice Fuzz: zapDepositETH con cualquier amount válido
+     * @notice Fuzz: zapDepositETH with any valid amount
      */
     function testFuzz_Router_ZapDepositETH(uint256 amount) external {
-        // Acotar amount entre 0.01 ETH y 1000 ETH
+        // Bound amount between 0.01 ETH and 1000 ETH
         amount = bound(amount, 0.01 ether, 1000 ether);
 
         deal(alice, amount);
@@ -284,20 +284,20 @@ contract FuzzTest is Test {
         vm.prank(alice);
         uint256 shares = router.zapDepositETH{value: amount}();
 
-        // Invariante: siempre recibe shares > 0
+        // Invariant: always receives shares > 0
         assertGt(shares, 0, "Should always receive shares");
         assertEq(IERC20(WETH).balanceOf(address(router)), 0, "Router must be stateless");
     }
 
     /**
-     * @notice Fuzz: zapDepositERC20 con cualquier amount y poolFee
+     * @notice Fuzz: zapDepositERC20 with any amount and poolFee
      */
     function testFuzz_Router_ZapDepositERC20(uint256 amount, uint24 pool_fee) external {
-        // Acotar amount (suficiente para superar min_deposit tras swap)
-        // 100 USDC → ~0.04 ETH, min_deposit es 0.01 ETH
-        amount = bound(amount, 100e6, 1_000_000e6); // 100 USDC a 1M USDC
+        // Bound amount (enough to exceed min_deposit after swap)
+        // 100 USDC → ~0.04 ETH, min_deposit is 0.01 ETH
+        amount = bound(amount, 100e6, 1_000_000e6); // 100 USDC to 1M USDC
 
-        // Acotar poolFee a valores válidos
+        // Bound poolFee to valid values
         uint24[4] memory valid_fees = [uint24(100), 500, 3000, 10000];
         pool_fee = valid_fees[pool_fee % 4];
 
@@ -308,7 +308,7 @@ contract FuzzTest is Test {
         uint256 shares = router.zapDepositERC20(USDC, amount, pool_fee, 0);
         vm.stopPrank();
 
-        // Invariante: siempre recibe shares
+        // Invariant: always receives shares
         assertGt(shares, 0, "Should receive shares");
         assertEq(IERC20(WETH).balanceOf(address(router)), 0, "Router must be stateless");
     }
